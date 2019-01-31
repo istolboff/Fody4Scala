@@ -5,6 +5,7 @@ using Mono.Cecil;
 using Mono.Cecil.Cil;
 using Mono.Cecil.Rocks;
 using Fody;
+using Mono.Collections.Generic;
 
 namespace Fody4Scala.Fody
 {
@@ -14,11 +15,12 @@ namespace Fody4Scala.Fody
         {
             foreach (var (caseClassesFactory, factoryMethods) in GetAllCaseClassFactoryMethodsGroupedByOwningClass())
             {
-                foreach (var caseClassFactoryMethod in factoryMethods)
+                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem.VoidReference);
+                foreach (var factoryMethod in factoryMethods)
                 {
-                    var caseClassTypeDefinition = GenerateCaseClass(caseClassesFactory, caseClassFactoryMethod);
+                    var caseClassTypeDefinition = caseClassBuilder.BuildCaseClass(factoryMethod);
                     ModuleDefinition.Types.Add(caseClassTypeDefinition);
-                    AdjustFactoryMethod(caseClassFactoryMethod, caseClassTypeDefinition);
+                    AdjustFactoryMethod(factoryMethod, caseClassTypeDefinition);
                 }
             }
         }
@@ -38,57 +40,6 @@ namespace Fody4Scala.Fody
 
         private bool MethodHasCustomAttribute(MethodDefinition method, Type attributeType) =>
             method.CustomAttributes.Any(attribute => attribute.AttributeType.FullName == attributeType.FullName);
-
-        private TypeDefinition GenerateCaseClass(TypeDefinition caseClassesFactory, MethodDefinition caseClassFactoryMethod)
-        {
-            var className = caseClassFactoryMethod.GenericParameters.Any()
-                ? caseClassFactoryMethod.Name + "`" + caseClassFactoryMethod.GenericParameters.Count
-                : caseClassFactoryMethod.Name;
-
-            var caseClassTypeDefinition = new TypeDefinition(
-                caseClassesFactory.Namespace,
-                className,
-                caseClassesFactory.Attributes & (TypeAttributes.VisibilityMask | TypeAttributes.LayoutMask) | TypeAttributes.Sealed,
-                caseClassesFactory);
-
-            caseClassTypeDefinition.GenericParameters.AddRange(caseClassFactoryMethod.GenericParameters
-                .Select(genericParameter => CloneGenericClassParameter(genericParameter, caseClassTypeDefinition)));
-
-            var ctor = GenerateConstructor(caseClassFactoryMethod, caseClassesFactory, caseClassTypeDefinition.GenericParameters);
-            caseClassTypeDefinition.Methods.Add(ctor);
-
-            var ctorBodyEmitter = ctor.Body.GetILProcessor();
-
-            // call base constructor
-            ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
-            ctorBodyEmitter.Emit(
-                OpCodes.Call,
-                ModuleDefinition.ImportReference(caseClassesFactory.GetConstructors().Single()));
-
-            var i = 0;
-
-            var genericInstanceType = caseClassFactoryMethod.GenericParameters.Any() 
-                    ? caseClassTypeDefinition.MakeGenericInstanceType(caseClassTypeDefinition.GenericParameters.ToArray())
-                    : null;
-            foreach (var (backingFieldDefinition, backingFieldReference, propertyGetMethod, propertyDefinition) in 
-                ctor.Parameters.Select(constructorParameter => GenerateProperty(constructorParameter, genericInstanceType)))
-            {
-                caseClassTypeDefinition.Fields.Add(backingFieldDefinition);
-                caseClassTypeDefinition.Methods.Add(propertyGetMethod);
-                caseClassTypeDefinition.Properties.Add(propertyDefinition);
-
-                // set field from parameter
-                ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
-                ctorBodyEmitter.EmitLoadNthArgument(i, ctor.Parameters, fromStaticMethod: false);
-                ctorBodyEmitter.Emit(OpCodes.Stfld, backingFieldReference);
-
-                ++i;
-            }
-
-            ctorBodyEmitter.Emit(OpCodes.Ret);
-
-            return caseClassTypeDefinition;
-        }
 
         private void AdjustFactoryMethod(MethodDefinition caseClassFactoryMethod, TypeDefinition caseClassTypeDefinition)
         {
@@ -117,105 +68,191 @@ namespace Fody4Scala.Fody
             factoryBodyEmitter.Emit(OpCodes.Ret);
         }
 
-        private MethodDefinition GenerateConstructor(
-            MethodDefinition caseClassFactoryMethod, 
-            TypeDefinition caseClassesFactory,
-            Mono.Collections.Generic.Collection<GenericParameter> genericParameters)
+        private class CaseClassBuilder
         {
-            var ctor = new MethodDefinition(
-                ".ctor", 
-                MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName, 
-                TypeSystem.VoidReference);
-
-            ctor.Parameters.AddRange(caseClassFactoryMethod.Parameters.Select(parameter => CloneMethodParameterDefinition(parameter, genericParameters)));
-            return ctor;
-        }
-
-        private static GenericParameter CloneGenericClassParameter(GenericParameter source, IGenericParameterProvider genericParameterProvider)
-        {
-            var result = new GenericParameter(source.Name, genericParameterProvider)
+            public CaseClassBuilder(
+                TypeDefinition caseClassesFactory, 
+                ModuleDefinition moduleDefinition,
+                TypeReference voidReference)
             {
-                HasReferenceTypeConstraint = source.HasReferenceTypeConstraint,
-                IsContravariant = source.IsContravariant,
-                IsCovariant = source.IsCovariant,
-                IsNonVariant = source.IsNonVariant,
-                IsValueType = source.IsValueType,
-                Attributes = source.Attributes,
-                HasNotNullableValueTypeConstraint = source.HasNotNullableValueTypeConstraint,
-                HasDefaultConstructorConstraint = source.HasDefaultConstructorConstraint
-            };
-            result.CustomAttributes.AddRange(source.CustomAttributes);
-            result.Constraints.AddRange(source.Constraints);
-            return result;
-        }
-
-        private ParameterDefinition CloneMethodParameterDefinition(
-            ParameterDefinition parameter,
-            Mono.Collections.Generic.Collection<GenericParameter> genericParameters)
-        {
-            if (!parameter.ParameterType.IsGenericParameter)
-            {
-                return parameter;
+                _factoryType = caseClassesFactory;
+                _voidReference = voidReference;
+                _factoryDefaultConstructor = moduleDefinition.ImportReference(caseClassesFactory.GetConstructors().Single());
             }
 
-            var genericParameterType = genericParameters.Single(p => p.FullName == parameter.ParameterType.FullName);
-            var result = new ParameterDefinition(parameter.Name, parameter.Attributes, genericParameterType)
-                        {
-                            IsOptional = parameter.IsOptional,
-                            IsLcid = parameter.IsLcid,
-                            IsIn = parameter.IsIn,
-                            MarshalInfo = parameter.MarshalInfo,
-                            HasDefault = parameter.HasDefault,
-                            HasFieldMarshal = parameter.HasFieldMarshal,
-                            MetadataToken = parameter.MetadataToken
-                        };
-            if (parameter.Constant != null)
+            public TypeDefinition BuildCaseClass(MethodDefinition factoryMethod)
             {
-                result.Constant = parameter.Constant;
+                var caseClassTypeDefinition = new TypeDefinition(
+                    _factoryType.Namespace,
+                    BuildCaseClassName(factoryMethod),
+                    _factoryType.Attributes & (TypeAttributes.VisibilityMask | TypeAttributes.LayoutMask) | TypeAttributes.Sealed,
+                    _factoryType);
+
+                caseClassTypeDefinition.GenericParameters.AddRange(
+                    factoryMethod.GenericParameters
+                        .Select(genericParameter => CloneGenericClassParameter(genericParameter, caseClassTypeDefinition)));
+
+                var genericInstanceType = factoryMethod.GenericParameters.Any()
+                        ? caseClassTypeDefinition.MakeGenericInstanceType(caseClassTypeDefinition.GenericParameters.ToArray())
+                        : null;
+
+                var properties = factoryMethod.Parameters.Select((p, i) =>
+                    new CaseClassProperty(p, i, genericInstanceType, caseClassTypeDefinition.GenericParameters)).ToArray();
+
+                caseClassTypeDefinition.Fields.AddRange(properties.Select(p => p.BackingField));
+                caseClassTypeDefinition.Properties.AddRange(properties.Select(p => p.Property));
+                caseClassTypeDefinition.Methods.AddRange(properties.Select(p => p.PropertyGetter));
+                caseClassTypeDefinition.Methods.Add(GenerateConstructor(properties));
+
+                return caseClassTypeDefinition;
             }
 
-            result.CustomAttributes.AddRange(parameter.CustomAttributes);
-            return result;
+            private MethodDefinition GenerateConstructor(CaseClassProperty[] properties)
+            {
+                var ctor = new MethodDefinition(
+                    ".ctor",
+                    MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
+                    _voidReference);
+
+                ctor.Parameters.AddRange(properties.Select(p => p.CtorParameter));
+
+                var ctorBodyEmitter = ctor.Body.GetILProcessor();
+                CallBaseConstructor(ctorBodyEmitter);
+                foreach (var p in properties)
+                {
+                    p.InitializeBackingFieldValue(ctorBodyEmitter, ctor.Parameters);
+                }
+
+                ctorBodyEmitter.Emit(OpCodes.Ret);
+                return ctor;
+            }
+
+            private void CallBaseConstructor(ILProcessor ctorBodyEmitter)
+            {
+                ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
+                ctorBodyEmitter.Emit(OpCodes.Call, _factoryDefaultConstructor);
+            }
+
+            private static string BuildCaseClassName(MethodDefinition caseClassFactoryMethod)
+            {
+                return caseClassFactoryMethod.GenericParameters.Any()
+                                ? caseClassFactoryMethod.Name + "`" + caseClassFactoryMethod.GenericParameters.Count
+                                : caseClassFactoryMethod.Name;
+            }
+
+            private static GenericParameter CloneGenericClassParameter(GenericParameter source, IGenericParameterProvider genericParameterProvider)
+            {
+                var result = new GenericParameter(source.Name, genericParameterProvider)
+                {
+                    HasReferenceTypeConstraint = source.HasReferenceTypeConstraint,
+                    IsContravariant = source.IsContravariant,
+                    IsCovariant = source.IsCovariant,
+                    IsNonVariant = source.IsNonVariant,
+                    IsValueType = source.IsValueType,
+                    Attributes = source.Attributes,
+                    HasNotNullableValueTypeConstraint = source.HasNotNullableValueTypeConstraint,
+                    HasDefaultConstructorConstraint = source.HasDefaultConstructorConstraint
+                };
+                result.CustomAttributes.AddRange(source.CustomAttributes);
+                result.Constraints.AddRange(source.Constraints);
+                return result;
+            }
+
+            private readonly TypeDefinition _factoryType;
+            private readonly TypeReference _voidReference;
+            private readonly MethodReference _factoryDefaultConstructor;
         }
 
-        private (FieldDefinition BackingFieldDefinition, FieldReference BackingFieldReference, MethodDefinition PropertyGetMethod, PropertyDefinition PropertyDefinition) 
-            GenerateProperty(ParameterDefinition constructorParameter, GenericInstanceType genericInstanceType)
+        private class CaseClassProperty
         {
-            var backingFieldDefinition = new FieldDefinition(
-                $"<{constructorParameter.Name}>k_BackingField", 
-                FieldAttributes.Private, 
-                constructorParameter.ParameterType);
-
-            var backingFieldReference = genericInstanceType == null
-                ? backingFieldDefinition
-                : new FieldReference(backingFieldDefinition.Name, backingFieldDefinition.FieldType, genericInstanceType);
-
-            var propertyName = constructorParameter.Name.PascalCase();
-
-            var propertyGetMethod = new MethodDefinition(
-                "get_" + propertyName, 
-                MethodAttributes.FamANDAssem | MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.SpecialName, 
-                constructorParameter.ParameterType)
+            public CaseClassProperty(
+                ParameterDefinition factoryMethodParameter, 
+                int parameterIndex, 
+                GenericInstanceType genericInstanceType,
+                Collection<GenericParameter> genericParameters)
             {
-                IsGetter = true,
-                SemanticsAttributes = MethodSemanticsAttributes.Getter
-            };
+                _factoryMethodParameter = factoryMethodParameter;
+                _parameterIndex = parameterIndex;
 
-            var getter = propertyGetMethod.Body.GetILProcessor();
-            getter.Emit(OpCodes.Ldarg_0);
-            getter.Emit(OpCodes.Ldfld, backingFieldReference);
-            getter.Emit(OpCodes.Ret);
+                CtorParameter = MakeConstructorParameter(genericParameters);
 
-            var propertyDefinition = new PropertyDefinition(
-                propertyName, 
-                PropertyAttributes.None, 
-                constructorParameter.ParameterType)
+                BackingField = new FieldDefinition(
+                    $"<{factoryMethodParameter.Name}>k_BackingField",
+                    FieldAttributes.Private,
+                    CtorParameter.ParameterType);
+
+                _backingFieldReference = genericInstanceType == null
+                    ? BackingField
+                    : new FieldReference(BackingField.Name, BackingField.FieldType, genericInstanceType);
+
+                var propertyName = factoryMethodParameter.Name.PascalCase();
+
+                PropertyGetter = new MethodDefinition(
+                    "get_" + propertyName,
+                    MethodAttributes.FamANDAssem | MethodAttributes.Family | MethodAttributes.HideBySig | MethodAttributes.SpecialName,
+                    CtorParameter.ParameterType)
+                {
+                    IsGetter = true,
+                    SemanticsAttributes = MethodSemanticsAttributes.Getter
+                };
+
+                var getter = PropertyGetter.Body.GetILProcessor();
+                getter.Emit(OpCodes.Ldarg_0);
+                getter.Emit(OpCodes.Ldfld, _backingFieldReference);
+                getter.Emit(OpCodes.Ret);
+
+                Property = new PropertyDefinition(propertyName, PropertyAttributes.None, CtorParameter.ParameterType)
+                {
+                    HasThis = true,
+                    GetMethod = PropertyGetter
+                };
+            }
+
+            public ParameterDefinition CtorParameter { get; }
+
+            public FieldDefinition BackingField { get; }
+
+            public MethodDefinition PropertyGetter { get; }
+
+            public PropertyDefinition Property { get; }
+
+            private ParameterDefinition MakeConstructorParameter(IEnumerable<GenericParameter> genericParameters)
             {
-                HasThis = true,
-                GetMethod = propertyGetMethod
-            };
+                if (!_factoryMethodParameter.ParameterType.IsGenericParameter)
+                {
+                    return _factoryMethodParameter;
+                }
 
-            return (backingFieldDefinition, backingFieldReference, propertyGetMethod, propertyDefinition);
+                var genericParameterType = genericParameters.Single(p => p.FullName == _factoryMethodParameter.ParameterType.FullName);
+                var result = new ParameterDefinition(_factoryMethodParameter.Name, _factoryMethodParameter.Attributes, genericParameterType)
+                {
+                    IsOptional = _factoryMethodParameter.IsOptional,
+                    IsLcid = _factoryMethodParameter.IsLcid,
+                    IsIn = _factoryMethodParameter.IsIn,
+                    MarshalInfo = _factoryMethodParameter.MarshalInfo,
+                    HasDefault = _factoryMethodParameter.HasDefault,
+                    HasFieldMarshal = _factoryMethodParameter.HasFieldMarshal,
+                    MetadataToken = _factoryMethodParameter.MetadataToken
+                };
+                if (_factoryMethodParameter.Constant != null)
+                {
+                    result.Constant = _factoryMethodParameter.Constant;
+                }
+
+                result.CustomAttributes.AddRange(_factoryMethodParameter.CustomAttributes);
+                return result;
+            }
+
+            public void InitializeBackingFieldValue(ILProcessor ctorBodyEmitter, Collection<ParameterDefinition> ctorParameters)
+            {
+                ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
+                ctorBodyEmitter.EmitLoadNthArgument(_parameterIndex, ctorParameters, fromStaticMethod: false);
+                ctorBodyEmitter.Emit(OpCodes.Stfld, _backingFieldReference);
+            }
+
+            private readonly ParameterDefinition _factoryMethodParameter;
+            private readonly int _parameterIndex;
+            private readonly FieldReference _backingFieldReference;
         }
     }
 }
