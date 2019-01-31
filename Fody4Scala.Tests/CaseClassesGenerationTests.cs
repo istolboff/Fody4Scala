@@ -30,7 +30,9 @@ namespace Fody4Scala.Tests
                     nameof(Expression.Variable),
                     nameof(Expression.Constant),
                     nameof(Expression.UnaryOperator),
-                    nameof(Expression.BinaryOperator)
+                    nameof(Expression.Money),
+                    nameof(Expression.LargeTuple),
+                    nameof(Expression.Func2)
                 })
             {
                 var generatedClassType = WeavedAssembly
@@ -51,6 +53,7 @@ namespace Fody4Scala.Tests
         [TestMethod]
         public void ValidateGeneratedClassesBehavior()
         {
+            // Variable
             var stringValues = new[] { null, string.Empty, " ", "oddName", "Very long string with a lot of text" };
             var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
 
@@ -64,12 +67,22 @@ namespace Fody4Scala.Tests
                 Assert.AreEqual(variableName, (string)variable.Name);
             }
 
+            // Money
             dynamic money = factoryClassType.GetMethod(nameof(Expression.Money)).Invoke(null, new object[] { 100M, "USD" });
             Assert.AreEqual(100M, (decimal)money.Amount);
             Assert.AreEqual("USD", (string)money.Currency);
 
             var constantMethod = factoryClassType.GetMethod(nameof(Expression.Constant));
 
+            // Constant
+            CheckGenericFactoryMethod(constantMethod, 0);
+            CheckGenericFactoryMethod(constantMethod, 10L);
+            CheckGenericFactoryMethod(constantMethod, 100.04M);
+            CheckGenericFactoryMethod(constantMethod, DateTime.Now);
+            CheckGenericFactoryMethod(constantMethod, Guid.NewGuid());
+            CheckGenericFactoryMethod(constantMethod, StringComparison.OrdinalIgnoreCase);
+
+            // UnaryOperator & BinaryOperator
             foreach (var arguments in from @operator in stringValues
                                    from expression in new dynamic[] 
                                                       {
@@ -95,6 +108,7 @@ namespace Fody4Scala.Tests
                 Assert.AreEqual(arguments[2], binaryOperator.RightExpression);
             }
 
+            // LargeTuple
             dynamic largeTuple = factoryClassType.GetMethod(nameof(Expression.LargeTuple)).Invoke(null, new object[] { "Hello!", 42, 146.73M, -256.7454, new DateTime(1000000L), Guid.Empty });
             Assert.AreEqual("Hello!", (string)largeTuple.Item1);
             Assert.AreEqual(42, (int)largeTuple.Item2);
@@ -103,12 +117,13 @@ namespace Fody4Scala.Tests
             Assert.AreEqual(new DateTime(1000000L), (DateTime)largeTuple.Item5);
             Assert.AreEqual(Guid.Empty, (Guid)largeTuple.Item6);
 
-            CheckGenericFactoryMethod(constantMethod, 0);
-            CheckGenericFactoryMethod(constantMethod, 10L);
-            CheckGenericFactoryMethod(constantMethod, 100.04M);
-            CheckGenericFactoryMethod(constantMethod, DateTime.Now);
-            CheckGenericFactoryMethod(constantMethod, Guid.NewGuid());
-            CheckGenericFactoryMethod(constantMethod, StringComparison.OrdinalIgnoreCase);
+            // Fun2
+            dynamic fun2 = factoryClassType.GetMethod(nameof(Expression.Func2))
+                .MakeGenericMethod(typeof(decimal), typeof(string), typeof(Dictionary<double, DateTime>))
+                .Invoke(null, new object[] { 43.67M, "Meow!", new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } } });
+            Assert.AreEqual(43.67M, (decimal)fun2.Arg1);
+            Assert.AreEqual("Meow!", (string)fun2.Arg2);
+            Assert.IsTrue(new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } }.SequenceEqual((Dictionary<double, DateTime>)fun2.Result));
         }
 
         private static void CheckGenericFactoryMethod<T>(MethodInfo genericFactoryMethod, T value)
