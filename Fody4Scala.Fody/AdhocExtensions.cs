@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -26,6 +27,22 @@ namespace Fody4Scala.Fody
         public static string PascalCase(this string @this)
         {
             return char.ToUpper(@this.First()).ToString() + @this.Substring(1);
+        }
+
+        public static TypeKind GetTypeKind(this TypeReference @this)
+        {
+            return @this.IsValueType 
+                    ? @this.FullName.StartsWith("System.Nullable`1") 
+                        ? TypeKind.NullableType
+                        : TypeKind.ValueType
+                    : TypeKind.ReferenceType;
+        }
+
+        public static TypeReference AsConcreteTypeReference(this TypeReference @this)
+        {
+            return @this.HasGenericParameters
+                ? @this.MakeGenericInstanceType(@this.GenericParameters.ToArray())
+                : @this;
         }
 
         public static MethodReference MakeGenericInstanceConstructor(this GenericInstanceType @this)
@@ -58,4 +75,6 @@ namespace Fody4Scala.Fody
 
         private static readonly OpCode[] FirstArguments = new[] { OpCodes.Ldarg_0, OpCodes.Ldarg_1, OpCodes.Ldarg_2, OpCodes.Ldarg_3 };
     }
+
+    internal enum TypeKind { ReferenceType, ValueType, NullableType }
 }

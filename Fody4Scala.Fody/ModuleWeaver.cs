@@ -15,7 +15,7 @@ namespace Fody4Scala.Fody
         {
             foreach (var (caseClassesFactory, factoryMethods) in GetAllCaseClassFactoryMethodsGroupedByOwningClass())
             {
-                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem.VoidReference);
+                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem, FindType);
                 foreach (var factoryMethod in factoryMethods)
                 {
                     var caseClassTypeDefinition = caseClassBuilder.BuildCaseClass(factoryMethod);
@@ -43,6 +43,12 @@ namespace Fody4Scala.Fody
 
         private void AdjustFactoryMethod(MethodDefinition caseClassFactoryMethod, TypeDefinition caseClassTypeDefinition)
         {
+            GenerateCaseClassConstructionCode(caseClassFactoryMethod, caseClassTypeDefinition);
+            RemoveCaseClassAttribute(caseClassFactoryMethod.CustomAttributes);
+        }
+
+        private static void GenerateCaseClassConstructionCode(MethodDefinition caseClassFactoryMethod, TypeDefinition caseClassTypeDefinition)
+        {
             MethodReference constructor;
             if (!caseClassFactoryMethod.GenericParameters.Any())
             {
@@ -68,16 +74,24 @@ namespace Fody4Scala.Fody
             factoryBodyEmitter.Emit(OpCodes.Ret);
         }
 
+        private void RemoveCaseClassAttribute(ICollection<CustomAttribute> customAttributes)
+        {
+            customAttributes.Remove(
+                customAttributes.Single(attr => attr.AttributeType.Name == typeof(CaseClassAttribute).Name));
+        }
+
         private class CaseClassBuilder
         {
             public CaseClassBuilder(
                 TypeDefinition caseClassesFactory, 
                 ModuleDefinition moduleDefinition,
-                TypeReference voidReference)
+                global::Fody.TypeSystem typeSystem,
+                Func<string, TypeDefinition> findType)
             {
                 _factoryType = caseClassesFactory;
-                _voidReference = voidReference;
-                _factoryDefaultConstructor = moduleDefinition.ImportReference(caseClassesFactory.GetConstructors().Single());
+                _moduleDefinition = moduleDefinition;
+                _typeSystem = typeSystem;
+                _findType = findType;
             }
 
             public TypeDefinition BuildCaseClass(MethodDefinition factoryMethod)
@@ -104,6 +118,8 @@ namespace Fody4Scala.Fody
                 caseClassTypeDefinition.Methods.AddRange(properties.Select(p => p.PropertyGetter));
                 caseClassTypeDefinition.Methods.Add(GenerateConstructor(properties));
 
+                ImplementIEquatable(caseClassTypeDefinition, properties);
+
                 return caseClassTypeDefinition;
             }
 
@@ -112,7 +128,7 @@ namespace Fody4Scala.Fody
                 var ctor = new MethodDefinition(
                     ".ctor",
                     MethodAttributes.Public | MethodAttributes.SpecialName | MethodAttributes.RTSpecialName,
-                    _voidReference);
+                    _typeSystem.VoidReference);
 
                 ctor.Parameters.AddRange(properties.Select(p => p.CtorParameter));
 
@@ -127,10 +143,38 @@ namespace Fody4Scala.Fody
                 return ctor;
             }
 
+            private void ImplementIEquatable(TypeDefinition caseClassTypeDefinition, CaseClassProperty[] properties)
+            {
+                var genericIEquatable = _moduleDefinition.ImportReference(_findType("System.IEquatable`1"));
+                var genericIEnumerable = _moduleDefinition.ImportReference(_findType("System.Collections.Generic.IEnumerable`1"));
+                var concreteCaseClassType = caseClassTypeDefinition.AsConcreteTypeReference();
+                var concreteIEquatable = genericIEquatable.MakeGenericInstanceType(concreteCaseClassType);
+                caseClassTypeDefinition.Interfaces.Add(new InterfaceImplementation(concreteIEquatable));
+
+                var method = new MethodDefinition(
+                    "Equals", 
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual, 
+                    _typeSystem.BooleanReference);
+
+                ParameterDefinition otherInstance = new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClassType);
+                method.Parameters.Add(otherInstance);
+                var compareCodeEmitter = method.Body.GetILProcessor();
+                foreach (var property in properties)
+                {
+                    property.EmitEqualityCheck(compareCodeEmitter, otherInstance, genericIEquatable, genericIEnumerable);
+                }
+
+                compareCodeEmitter.Emit(OpCodes.Ldc_I4_1);
+                compareCodeEmitter.Emit(OpCodes.Ret);
+
+                caseClassTypeDefinition.Methods.Add(method);
+            }
+
             private void CallBaseConstructor(ILProcessor ctorBodyEmitter)
             {
+                var factoryDefaultConstructor = _moduleDefinition.ImportReference(_factoryType.GetConstructors().Single());
                 ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
-                ctorBodyEmitter.Emit(OpCodes.Call, _factoryDefaultConstructor);
+                ctorBodyEmitter.Emit(OpCodes.Call, factoryDefaultConstructor);
             }
 
             private static string BuildCaseClassName(MethodDefinition caseClassFactoryMethod)
@@ -159,8 +203,9 @@ namespace Fody4Scala.Fody
             }
 
             private readonly TypeDefinition _factoryType;
-            private readonly TypeReference _voidReference;
-            private readonly MethodReference _factoryDefaultConstructor;
+            private readonly ModuleDefinition _moduleDefinition;
+            private readonly global::Fody.TypeSystem _typeSystem;
+            private readonly Func<string, TypeDefinition> _findType;
         }
 
         private class CaseClassProperty
@@ -248,6 +293,78 @@ namespace Fody4Scala.Fody
                 ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
                 ctorBodyEmitter.EmitLoadNthArgument(_parameterIndex, ctorParameters, fromStaticMethod: false);
                 ctorBodyEmitter.Emit(OpCodes.Stfld, _backingFieldReference);
+            }
+
+            public void EmitEqualityCheck(
+                ILProcessor compareCodeEmitter, 
+                ParameterDefinition otherInstance, 
+                TypeReference genericIEquatable, 
+                TypeReference genericIEnumerable)
+            {
+                if (!_backingFieldReference.FieldType.IsGenericParameter)
+                {
+                    bool IsGenericIEnumerable(TypeReference typeReference) =>
+                        typeReference.Namespace == "System.Collections.Generic" && typeReference.Name == "IEnumerable`1";
+
+                    bool IsIEnumerable(TypeReference typeReference) =>
+                        typeReference.Namespace == "System.Collections" && typeReference.Name == "IEnumerable";
+
+                    var fieldType = _backingFieldReference.FieldType.Resolve();
+                    var equatableFieldType = genericIEquatable.MakeGenericInstanceType(fieldType).FullName;
+                    var fieldImplementsIEquatable = fieldType.Interfaces.Any(i => i.InterfaceType.FullName == equatableFieldType);
+                    var fieldIsTypedCollection = IsGenericIEnumerable(fieldType) || 
+                                                 fieldType.Interfaces.Any(i => IsGenericIEnumerable(i.InterfaceType));
+                    var fieldIsUntypedCollection = !fieldIsTypedCollection && 
+                                                (IsIEnumerable(fieldType) || 
+                                                 fieldType.Interfaces.Any(i => IsIEnumerable(i.InterfaceType)));
+
+                    switch (_backingFieldReference.FieldType.GetTypeKind())
+                    {
+                        case TypeKind.ReferenceType:
+                            if (fieldImplementsIEquatable)
+                            {
+                                // if (!DeepEqualityComparer.EquatableReferencesAreEqual(this, other)) return false;
+                            }
+                            else if (fieldIsTypedCollection)
+                            {
+                                // if (!DeepEqualityComparer.TypedCollectionsAreEqual(this, other)) return false;
+                            }
+                            else if (fieldIsUntypedCollection)
+                            {
+                                // if (!DeepEqualityComparer.UntypedCollectionsAreEqual(this, other)) return false;
+                            }
+                            else
+                            {
+                                // if (!DeepEqualityComparer.ReferenceInstancesAreEqual(this, other)) return false;
+                            }
+
+                            break;
+
+                        case TypeKind.ValueType:
+                            if (fieldImplementsIEquatable)
+                            {
+                                // if (!((IEquatable<T>)this).Equals(other)) return false;
+                            }
+                            else
+                            {
+                                // if (!this.ValueType::Equals(other)) return false;
+                            }
+
+                            break;
+
+                        default: // TypeKind.NullableType:
+                            if (fieldImplementsIEquatable)
+                            {
+                                // if (!DeepEqualityComparer.EquatableNullablesAreEqual(this, other)) return false;
+                            }
+                            else
+                            {
+                                // if (!DeepEqualityComparer.NullablesAreEqual(this, other)) return false;
+                            }
+
+                            break;
+                    }
+                }
             }
 
             private readonly ParameterDefinition _factoryMethodParameter;

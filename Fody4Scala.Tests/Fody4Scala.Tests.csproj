@@ -85,6 +85,10 @@
       <Project>{968b2f4c-b609-47ec-b63b-59c20b031330}</Project>
       <Name>Fody4Scala.Fody</Name>
     </ProjectReference>
+    <ProjectReference Include="..\Fody4Scala\Fody4Scala.csproj">
+      <Project>{4792bc71-5615-4d92-9000-fd18d3e6cfae}</Project>
+      <Name>Fody4Scala</Name>
+    </ProjectReference>
   </ItemGroup>
   <ItemGroup>
     <Content Include="FodyWeavers.xml" />
