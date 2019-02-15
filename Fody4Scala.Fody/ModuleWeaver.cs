@@ -104,14 +104,14 @@ namespace Fody4Scala.Fody
 
                 caseClassTypeDefinition.GenericParameters.AddRange(
                     factoryMethod.GenericParameters
-                        .Select(genericParameter => CloneGenericClassParameter(genericParameter, caseClassTypeDefinition)));
+                        .Select(genericParameter => genericParameter.CloneWith(caseClassTypeDefinition)));
 
                 var genericInstanceType = factoryMethod.GenericParameters.Any()
                         ? caseClassTypeDefinition.MakeGenericInstanceType(caseClassTypeDefinition.GenericParameters.ToArray())
                         : null;
 
                 var properties = factoryMethod.Parameters.Select((p, i) =>
-                    new CaseClassProperty(p, i, genericInstanceType, caseClassTypeDefinition.GenericParameters)).ToArray();
+                    new CaseClassProperty(p, i, genericInstanceType, caseClassTypeDefinition.GenericParameters, _moduleDefinition)).ToArray();
 
                 caseClassTypeDefinition.Fields.AddRange(properties.Select(p => p.BackingField));
                 caseClassTypeDefinition.Properties.AddRange(properties.Select(p => p.Property));
@@ -184,24 +184,6 @@ namespace Fody4Scala.Fody
                                 : caseClassFactoryMethod.Name;
             }
 
-            private static GenericParameter CloneGenericClassParameter(GenericParameter source, IGenericParameterProvider genericParameterProvider)
-            {
-                var result = new GenericParameter(source.Name, genericParameterProvider)
-                {
-                    HasReferenceTypeConstraint = source.HasReferenceTypeConstraint,
-                    IsContravariant = source.IsContravariant,
-                    IsCovariant = source.IsCovariant,
-                    IsNonVariant = source.IsNonVariant,
-                    IsValueType = source.IsValueType,
-                    Attributes = source.Attributes,
-                    HasNotNullableValueTypeConstraint = source.HasNotNullableValueTypeConstraint,
-                    HasDefaultConstructorConstraint = source.HasDefaultConstructorConstraint
-                };
-                result.CustomAttributes.AddRange(source.CustomAttributes);
-                result.Constraints.AddRange(source.Constraints);
-                return result;
-            }
-
             private readonly TypeDefinition _factoryType;
             private readonly ModuleDefinition _moduleDefinition;
             private readonly global::Fody.TypeSystem _typeSystem;
@@ -214,12 +196,13 @@ namespace Fody4Scala.Fody
                 ParameterDefinition factoryMethodParameter, 
                 int parameterIndex, 
                 GenericInstanceType genericInstanceType,
-                Collection<GenericParameter> genericParameters)
+                Collection<GenericParameter> genericParameters,
+                ModuleDefinition moduleDefinition)
             {
                 _factoryMethodParameter = factoryMethodParameter;
                 _parameterIndex = parameterIndex;
 
-                CtorParameter = MakeConstructorParameter(genericParameters);
+                CtorParameter = MakeConstructorParameter(genericParameters, moduleDefinition);
 
                 BackingField = new FieldDefinition(
                     $"<{factoryMethodParameter.Name}>k_BackingField",
@@ -261,33 +244,6 @@ namespace Fody4Scala.Fody
 
             public PropertyDefinition Property { get; }
 
-            private ParameterDefinition MakeConstructorParameter(IEnumerable<GenericParameter> genericParameters)
-            {
-                if (!_factoryMethodParameter.ParameterType.IsGenericParameter)
-                {
-                    return _factoryMethodParameter;
-                }
-
-                var genericParameterType = genericParameters.Single(p => p.FullName == _factoryMethodParameter.ParameterType.FullName);
-                var result = new ParameterDefinition(_factoryMethodParameter.Name, _factoryMethodParameter.Attributes, genericParameterType)
-                {
-                    IsOptional = _factoryMethodParameter.IsOptional,
-                    IsLcid = _factoryMethodParameter.IsLcid,
-                    IsIn = _factoryMethodParameter.IsIn,
-                    MarshalInfo = _factoryMethodParameter.MarshalInfo,
-                    HasDefault = _factoryMethodParameter.HasDefault,
-                    HasFieldMarshal = _factoryMethodParameter.HasFieldMarshal,
-                    MetadataToken = _factoryMethodParameter.MetadataToken
-                };
-                if (_factoryMethodParameter.Constant != null)
-                {
-                    result.Constant = _factoryMethodParameter.Constant;
-                }
-
-                result.CustomAttributes.AddRange(_factoryMethodParameter.CustomAttributes);
-                return result;
-            }
-
             public void InitializeBackingFieldValue(ILProcessor ctorBodyEmitter, Collection<ParameterDefinition> ctorParameters)
             {
                 ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
@@ -296,9 +252,9 @@ namespace Fody4Scala.Fody
             }
 
             public void EmitEqualityCheck(
-                ILProcessor compareCodeEmitter, 
-                ParameterDefinition otherInstance, 
-                TypeReference genericIEquatable, 
+                ILProcessor compareCodeEmitter,
+                ParameterDefinition otherInstance,
+                TypeReference genericIEquatable,
                 TypeReference genericIEnumerable)
             {
                 if (!_backingFieldReference.FieldType.IsGenericParameter)
@@ -312,10 +268,10 @@ namespace Fody4Scala.Fody
                     var fieldType = _backingFieldReference.FieldType.Resolve();
                     var equatableFieldType = genericIEquatable.MakeGenericInstanceType(fieldType).FullName;
                     var fieldImplementsIEquatable = fieldType.Interfaces.Any(i => i.InterfaceType.FullName == equatableFieldType);
-                    var fieldIsTypedCollection = IsGenericIEnumerable(fieldType) || 
+                    var fieldIsTypedCollection = IsGenericIEnumerable(fieldType) ||
                                                  fieldType.Interfaces.Any(i => IsGenericIEnumerable(i.InterfaceType));
-                    var fieldIsUntypedCollection = !fieldIsTypedCollection && 
-                                                (IsIEnumerable(fieldType) || 
+                    var fieldIsUntypedCollection = !fieldIsTypedCollection &&
+                                                (IsIEnumerable(fieldType) ||
                                                  fieldType.Interfaces.Any(i => IsIEnumerable(i.InterfaceType)));
 
                     switch (_backingFieldReference.FieldType.GetTypeKind())
@@ -365,6 +321,27 @@ namespace Fody4Scala.Fody
                             break;
                     }
                 }
+            }
+
+            private ParameterDefinition MakeConstructorParameter(
+                ICollection<GenericParameter> genericParameters,
+                ModuleDefinition moduleDefinition)
+            {
+                if (_factoryMethodParameter.ParameterType.IsGenericParameter)
+                {
+                    return _factoryMethodParameter.ChangeType(
+                        genericParameters.Single(p => p.FullName == _factoryMethodParameter.ParameterType.FullName));
+                }
+
+                if (_factoryMethodParameter.ParameterType is GenericInstanceType genericInstanceType &&
+                    genericInstanceType.HasGenericArguments &&
+                    genericParameters.Any())
+                {
+                    return _factoryMethodParameter.ChangeType(
+                        genericInstanceType.SubstituteGenericParameters(genericParameters, moduleDefinition));
+                }
+
+                return _factoryMethodParameter;
             }
 
             private readonly ParameterDefinition _factoryMethodParameter;

@@ -8,6 +8,9 @@ namespace AssemblyToProcess
     public abstract class Expression
     {
         [CaseClass]
+        public static Expression Degenerate() { throw new NotImplementedException(); }
+
+        [CaseClass]
         public static Expression Variable(string name) { throw new NotImplementedException(); }
 
         [CaseClass]
@@ -45,8 +48,9 @@ namespace AssemblyToProcess
 
         [CaseClass]
         public static Expression OneOf<T, U>(
-            IReadOnlyCollection<T> alternatives, 
-            IEnumerable<U?> anotherSet, 
-            ICollection<KeyValuePair<T, U?>> complexOne) where U : struct { throw new NotImplementedException(); }
+            IReadOnlyCollection<T> alternatives,
+            IEnumerable<U?> anotherSet,
+            ICollection<KeyValuePair<T, U?>> complexOne) where U : struct
+        { throw new NotImplementedException(); }
     }
 }

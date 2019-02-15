@@ -28,6 +28,7 @@ namespace Fody4Scala.Tests
             var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
             foreach (var factoryMethodName in new[]
                 {
+                    nameof(Expression.Degenerate),
                     nameof(Expression.Variable),
                     nameof(Expression.Constant),
                     nameof(Expression.Reference),
@@ -36,7 +37,8 @@ namespace Fody4Scala.Tests
                     nameof(Expression.BinaryOperator),
                     nameof(Expression.LargeTuple),
                     nameof(Expression.Func2),
-                    nameof(Expression.Maybe)
+                    nameof(Expression.Maybe),
+                    nameof(Expression.OneOf)
                 })
             {
                 var generatedClassType = WeavedAssembly
@@ -262,7 +264,23 @@ namespace Fody4Scala.Tests
 
             private static bool? TypesAreEqual(Type t1, Type t2)
             {
-                return t1.IsGenericParameter ? t2.IsGenericParameter && t1.Name == t2.Name : (bool?)null;
+                if (t1.IsGenericParameter)
+                {
+                    return t2.IsGenericParameter && t1.Name == t2.Name;
+                }
+
+                if (t1.IsConstructedGenericType)
+                {
+                    return ReferenceEquals(t1, t2) ||
+                           t2.IsConstructedGenericType &&
+                           t1.Name == t2.Name &&
+                           t1.Namespace == t2.Namespace &&
+                           t1.Assembly == t2.Assembly &&
+                           t1.GenericTypeArguments.Select(ga => ga.FullName).SequenceEqual(
+                               t2.GenericTypeArguments.Select(ga => ga.FullName));
+                }
+
+                return (bool?)null;
             }
 
             private readonly Type _caseClassType;

@@ -1,5 +1,5 @@
-﻿using System;
-using System.Collections.Generic;
+﻿using System.Collections.Generic;
+using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
 using Mono.Cecil.Cil;
@@ -57,6 +57,77 @@ namespace Fody4Scala.Fody
             result.Parameters.AddRange(resolvedType.Parameters.Select(parameter => new ParameterDefinition(parameter.ParameterType)));
             result.GenericParameters.AddRange(resolvedType.GenericParameters.Select(parameter => new GenericParameter(parameter.Name, result)));
 
+            return result;
+        }
+
+        public static GenericParameter CloneWith(this GenericParameter @this, IGenericParameterProvider genericParameterProvider)
+        {
+            var result = new GenericParameter(@this.Name, genericParameterProvider)
+            {
+                HasReferenceTypeConstraint = @this.HasReferenceTypeConstraint,
+                IsContravariant = @this.IsContravariant,
+                IsCovariant = @this.IsCovariant,
+                IsNonVariant = @this.IsNonVariant,
+                IsValueType = @this.IsValueType,
+                Attributes = @this.Attributes,
+                HasNotNullableValueTypeConstraint = @this.HasNotNullableValueTypeConstraint,
+                HasDefaultConstructorConstraint = @this.HasDefaultConstructorConstraint
+            };
+            result.CustomAttributes.AddRange(@this.CustomAttributes);
+            result.Constraints.AddRange(@this.Constraints);
+            return result;
+        }
+
+        public static TypeReference SubstituteGenericParameters(
+            this GenericInstanceType @this, 
+            IEnumerable<GenericParameter> genericParameters,
+            ModuleDefinition moduleDefinition)
+        {
+            var genericType = moduleDefinition.ImportReference(@this.Resolve());
+            Debug.Assert(genericType.GenericParameters.Count == @this.GenericArguments.Count);
+            var substitutedGenericParameters = Enumerable
+                .Range(0, genericType.GenericParameters.Count)
+                .Select(i =>
+                {
+                    var argument = @this.GenericArguments[i];
+                    var parameter = genericType.GenericParameters[i];
+
+                    if (argument.IsGenericParameter)
+                    {
+                        Debug.Assert(genericParameters.Any(gp => gp.FullName == argument.FullName));
+                        return genericParameters.Single(gp => gp.FullName == argument.FullName);
+                    }
+
+                    if (argument.IsGenericInstance && argument is GenericInstanceType genericInstanceType)
+                    {
+                        return SubstituteGenericParameters(genericInstanceType, genericParameters, moduleDefinition);
+                    }
+
+                    return argument;
+                })
+                .ToArray();
+
+            return genericType.MakeGenericInstanceType(substitutedGenericParameters);
+        }
+
+        public static ParameterDefinition ChangeType(this ParameterDefinition @this, TypeReference typeReference)
+        {
+            var result = new ParameterDefinition(@this.Name, @this.Attributes, typeReference)
+            {
+                IsOptional = @this.IsOptional,
+                IsLcid = @this.IsLcid,
+                IsIn = @this.IsIn,
+                MarshalInfo = @this.MarshalInfo,
+                HasDefault = @this.HasDefault,
+                HasFieldMarshal = @this.HasFieldMarshal,
+                MetadataToken = @this.MetadataToken
+            };
+            if (@this.Constant != null)
+            {
+                result.Constant = @this.Constant;
+            }
+
+            result.CustomAttributes.AddRange(@this.CustomAttributes);
             return result;
         }
 
