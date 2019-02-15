@@ -17,7 +17,10 @@ namespace AssemblyToProcess
         public static Expression Constant<T>(T value) where T : struct { throw new NotImplementedException(); }
 
         [CaseClass]
-        public static Expression Reference<T>(T reference) where T : class { throw new NotImplementedException(); }
+        public static Expression Reference<T>(T value) where T : class { throw new NotImplementedException(); }
+
+        [CaseClass]
+        public static Expression Maybe<T>(T? value) where T : struct { throw new NotImplementedException(); }
 
         [CaseClass]
         public static Expression Money(decimal amount, string currency) { throw new NotImplementedException(); }
@@ -33,9 +36,6 @@ namespace AssemblyToProcess
 
         [CaseClass]
         public static Expression Func2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result) { throw new NotImplementedException(); }
-
-        [CaseClass]
-        public static Expression Maybe<T>(T? value) where T : struct { throw new NotImplementedException(); }
 
         [CaseClass]
         public static Expression SimpleCollection(

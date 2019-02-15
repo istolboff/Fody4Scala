@@ -71,6 +71,7 @@ namespace Fody4Scala.Tests
                 left != null && right != null && left.Cast<object>().SequenceEqual(right.Cast<object>());
 
             Check.NonGenericClasses(
+                checkDegenerate: (createDegenerate) => {},
                 checkVariable: (variableName, createVariable) => 
                 {
                     if (variableName != null)
@@ -120,42 +121,13 @@ namespace Fody4Scala.Tests
                     Assert.IsTrue(UntypedSequencesAreEqual(someOtherThings, (ArrayList)simpleCollection.SomeOtherThings));
                 });
 
-            var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
-
-            // Constant
-            var constantMethod = factoryClassType.GetMethod(nameof(Expression.Constant));
-            void CheckGenericFactoryMethod<T>(T value)
-            {
-                dynamic constant = constantMethod.MakeGenericMethod(typeof(T)).Invoke(null, new object[] { value });
-                Assert.AreEqual(value, (T)constant.Value);
-            }
-
-            CheckGenericFactoryMethod(0);
-            CheckGenericFactoryMethod(10L);
-            CheckGenericFactoryMethod(100.04M);
-            CheckGenericFactoryMethod(DateTime.Now);
-            CheckGenericFactoryMethod(Guid.NewGuid());
-            CheckGenericFactoryMethod(StringComparison.OrdinalIgnoreCase);
-
-            // Fun2
-            dynamic fun2 = factoryClassType.GetMethod(nameof(Expression.Func2))
-                .MakeGenericMethod(typeof(decimal), typeof(string), typeof(Dictionary<double, DateTime>))
-                .Invoke(null, new object[] { 43.67M, "Meow!", new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } } });
-            Assert.AreEqual(43.67M, (decimal)fun2.Arg1);
-            Assert.AreEqual("Meow!", (string)fun2.Arg2);
-            Assert.IsTrue(new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } }.SequenceEqual((Dictionary<double, DateTime>)fun2.Result));
-        }
-
-        private abstract class CheckingGenericClassLogic
-        {
-            public abstract void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeConstant);
-
-            public abstract void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2);
+            Check.GenericClasses(new CheckingGenericClassProperties());
         }
 
         [TestMethod]
         public void ValidateGeneratedClassesEqualityComparison()
         {
+            var degenerateMakers = new List<Func<dynamic>>();
             var variableMakers = new List<Func<dynamic>>();
             var moneyMakers = new List<Func<dynamic>>();
             var unaryOperatorMakers = new List<Func<dynamic>>();
@@ -164,6 +136,7 @@ namespace Fody4Scala.Tests
             var simpleCollectionMakers = new List<Func<dynamic>>();
 
             Check.NonGenericClasses(
+                checkDegenerate: (degenerate) => degenerateMakers.Add(degenerate),
                 checkVariable: (_, variable) => variableMakers.Add(variable),
                 checkMoney: (_, __, money) => moneyMakers.Add(money),
                 checkUnaryOperator: (_, __, unaryOperator) => unaryOperatorMakers.Add(unaryOperator),
@@ -171,7 +144,7 @@ namespace Fody4Scala.Tests
                 checkLargeTuple: (_, __, ___, ____, _______, _________, largeTuple) => largeTupleMakers.Add(largeTuple),
                 checkSimpleCollection: (_, __, ___, ____, _______, _________, simpleCollection) => simpleCollectionMakers.Add(simpleCollection));
 
-            foreach (var instanceMakers in new[] { variableMakers, moneyMakers, unaryOperatorMakers, binaryOperatorMakers, largeTupleMakers, simpleCollectionMakers })
+            foreach (var instanceMakers in new[] { degenerateMakers, variableMakers, moneyMakers, unaryOperatorMakers, binaryOperatorMakers, largeTupleMakers, simpleCollectionMakers })
             {
                 Assert.IsTrue(instanceMakers.Count > 1, $"Check.NonGenericClasses() should generate several instances of {instanceMakers.Single()().GetType().Name}");
                 foreach (var (makeLeft, makeRight) in from makeLeft in instanceMakers
@@ -280,7 +253,7 @@ namespace Fody4Scala.Tests
                                t2.GenericTypeArguments.Select(ga => ga.FullName));
                 }
 
-                return (bool?)null;
+                return null;
             }
 
             private readonly Type _caseClassType;
@@ -289,6 +262,7 @@ namespace Fody4Scala.Tests
         private static class Check
         {
             public static void NonGenericClasses(
+                Action<Func<dynamic>> checkDegenerate,
                 Action<string, Func<dynamic>> checkVariable,
                 Action<decimal, string, Func<dynamic>> checkMoney,
                 Action<string, dynamic, Func<dynamic>> checkUnaryOperator,
@@ -297,6 +271,11 @@ namespace Fody4Scala.Tests
                 Action<IEnumerable<int>, IReadOnlyCollection<DateTime>, List<string>, decimal[], IEnumerable, ArrayList, Func<dynamic>> checkSimpleCollection)
             {
                 var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
+
+                // Degenerate
+                var degenerateFactory = factoryClassType.GetMethod(nameof(Expression.Degenerate));
+                checkDegenerate(() => degenerateFactory.Invoke(null, new object[0]));
+                checkDegenerate(() => degenerateFactory.Invoke(null, new object[0]));
 
                 // Variable
                 var stringValues = new[] { null, string.Empty, " ", "oddName", "Very long string with a lot of text" };
@@ -349,9 +328,9 @@ namespace Fody4Scala.Tests
                 // Simple Collection
                 var simpleCollectionFactory = factoryClassType.GetMethod(nameof(Expression.SimpleCollection));
                 var rand = new Random(935630);
-                foreach (var (ints, dates, strings, decimals, someThings, someOtherThings) in 
-                                        from ints in Enumerable.Range(0, rand.Next(4, 10)).Select(n => Enumerable.Range(0, n).Select(_ => rand.Next()).ToArray())
-                                        let dates = ints.Take(rand.Next(3, ints.Length)).Select(v => DateTime.MinValue + TimeSpan.FromDays(v)).ToArray()
+                foreach (var (ints, dates, strings, decimals, someThings, someOtherThings) in
+                                        from ints in Enumerable.Range(0, 5).Select(_ => Enumerable.Range(0, rand.Next(4, 10)).Select(__ => rand.Next()).ToArray())
+                                        let dates = ints.Take(rand.Next(3, ints.Length)).Select(v => DateTime.MinValue + TimeSpan.FromDays(v % 100)).ToArray()
                                         let strings = ints.Take(rand.Next(3, ints.Length)).Select(v => $"item-{v}").ToList()
                                         let decimals = ints.Take(rand.Next(3, ints.Length)).Select((v, i) => ((decimal)v - 1)/ ((decimal)v + i + 1)).ToArray()
                                         let someThings = (IEnumerable)ints.Take(rand.Next(3, ints.Length)).Select((v, i) => (object)Pair(Math.PI * v, i))
@@ -392,8 +371,8 @@ namespace Fody4Scala.Tests
 
                 // Maybe
                 var maybeMethod = factoryClassType.GetMethod(nameof(Expression.Maybe));
-                CheckGenericFactoryMethod<int, int?>(referenceMethod, 0, 1, -100, int.MaxValue, int.MinValue, null);
-                CheckGenericFactoryMethod<DateTime, DateTime?>(referenceMethod, DateTime.Now, DateTime.MinValue, DateTime.MinValue, null);
+                CheckGenericFactoryMethod<int, int?>(maybeMethod, 0, 1, -100, int.MaxValue, int.MinValue, null);
+                CheckGenericFactoryMethod<DateTime, DateTime?>(maybeMethod, DateTime.Now, DateTime.MinValue, DateTime.MinValue, null);
 
                 // Fun2
                 dynamic fun2 = factoryClassType.GetMethod(nameof(Expression.Func2))
@@ -436,6 +415,30 @@ namespace Fody4Scala.Tests
                 return (bool)typeof(T)
                     .GetMethod(equality ? "op_Equality" : "op_Inequality", BindingFlags.Static | BindingFlags.Public)
                     .Invoke(null, new object[] { left, right });
+            }
+        }
+
+        private abstract class CheckingGenericClassLogic
+        {
+            public abstract void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeInstance);
+
+            public abstract void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2);
+        }
+
+        private class CheckingGenericClassProperties : CheckingGenericClassLogic
+        {
+            public override void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeInstance)
+            {
+                var instance = makeInstance();
+                Assert.AreEqual(value, instance.Value);
+            }
+
+            public override void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2)
+            {
+                var fun2 = makeFun2();
+                Assert.AreEqual(arg1, fun2.Arg1);
+                Assert.AreEqual(arg2, fun2.Arg2);
+                Assert.AreEqual(result, fun2.Result);
             }
         }
     }
