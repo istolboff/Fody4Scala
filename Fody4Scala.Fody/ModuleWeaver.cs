@@ -126,7 +126,9 @@ namespace Fody4Scala.Fody
                 caseClassTypeDefinition.Methods.AddRange(properties.Select(p => p.PropertyGetter));
                 caseClassTypeDefinition.Methods.Add(GenerateConstructor(properties));
 
-                ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
+                var typedEqualsMethod = ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
+                caseClassTypeDefinition.Methods.Add(typedEqualsMethod);
+                caseClassTypeDefinition.Methods.Add(OverrideObjectEquals(caseClassTypeDefinition, typedEqualsMethod));
 
                 return caseClassTypeDefinition;
             }
@@ -151,7 +153,7 @@ namespace Fody4Scala.Fody
                 return ctor;
             }
 
-            private void ImplementIEquatable(
+            private MethodDefinition ImplementIEquatable(
                 TypeDefinition caseClassTypeDefinition, 
                 CaseClassProperty[] properties,
                 FieldVarietyDetector fieldVarietyDetector)
@@ -163,7 +165,7 @@ namespace Fody4Scala.Fody
                     MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual, 
                     _typeSystem.BooleanReference);
 
-                ParameterDefinition otherInstance = new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClassType);
+                var otherInstance = new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClassType);
                 method.Parameters.Add(otherInstance);
                 var compareCodeEmitter = method.Body.GetILProcessor();
                 foreach (var property in properties)
@@ -174,7 +176,27 @@ namespace Fody4Scala.Fody
                 compareCodeEmitter.Emit(OpCodes.Ldc_I4_1);
                 compareCodeEmitter.Emit(OpCodes.Ret);
 
-                caseClassTypeDefinition.Methods.Add(method);
+                return method;
+            }
+
+            private MethodDefinition OverrideObjectEquals(TypeDefinition caseClassTypeDefinition, MethodDefinition typedEqualsMethod)
+            {
+                var method = new MethodDefinition(
+                    "Equals", 
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual, 
+                    _typeSystem.BooleanReference);
+
+                var otherInstance = new ParameterDefinition("obj", ParameterAttributes.None, _typeSystem.ObjectReference);
+                method.Parameters.Add(otherInstance);
+                var compareCodeEmitter = method.Body.GetILProcessor();
+
+                compareCodeEmitter.Emit(OpCodes.Ldarg_0);
+                compareCodeEmitter.Emit(OpCodes.Ldarg_1);
+                compareCodeEmitter.Emit(OpCodes.Isinst, caseClassTypeDefinition.AsConcreteTypeReference());
+                compareCodeEmitter.Emit(OpCodes.Call, typedEqualsMethod);
+                compareCodeEmitter.Emit(OpCodes.Ret);
+
+                return method;
             }
 
             private void CallBaseConstructor(ILProcessor ctorBodyEmitter)

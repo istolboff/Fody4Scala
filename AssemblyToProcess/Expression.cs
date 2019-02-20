@@ -90,5 +90,10 @@ namespace AssemblyToProcess
             }
             return true;
         }
+
+        public override bool Equals(object obj)
+        {
+            return Equals(obj as Something<T>);
+        }
     }
 }

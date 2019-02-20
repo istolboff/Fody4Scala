@@ -14,7 +14,7 @@ namespace Fody4Scala
             return enumerableOfT == null
                 ? EqualityComparer<T>.Default
                 : (IEqualityComparer<T>)typeof(DeepEqualityComparer)
-                    .GetMethod("ForEnumerables", BindingFlags.Public | BindingFlags.Static)
+                    .GetMethod(nameof(ForEnumerables), BindingFlags.Public | BindingFlags.Static)
                     .MakeGenericMethod(enumerableOfT.Single())
                     .Invoke(null, new object[] { });
         }
