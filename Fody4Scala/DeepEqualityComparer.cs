@@ -29,12 +29,14 @@ namespace Fody4Scala
                 ? ReferenceEquals(left, right) 
                 : left.Equals(right);
 
-        public static bool TypedCollectionsAreEqual<T>(IEnumerable<T> left, IEnumerable<T> right) =>
+        public static bool TypedCollectionsAreEqual<T>(IEnumerable<T> left, IEnumerable<T> right) 
+            =>
             ReferenceEquals(left, null) || ReferenceEquals(right, null)
                 ? ReferenceEquals(left, right)
                 : left.SequenceEqual(right, Default<T>());
 
-        public static bool UntypedCollectionsAreEqual(IEnumerable left, IEnumerable right) =>
+        public static bool UntypedCollectionsAreEqual(IEnumerable left, IEnumerable right) 
+            =>
             ReferenceEquals(left, null) || ReferenceEquals(right, null)
                 ? ReferenceEquals(left, right)
                 : left.Cast<object>().SequenceEqual(right.Cast<object>());
@@ -45,6 +47,16 @@ namespace Fody4Scala
             ReferenceEquals(left, null) || ReferenceEquals(right, null)
                 ? ReferenceEquals(left, right)
                 : left.Equals(right);
+
+        public static bool EquatableValuesAreEqual<T>(T left, T right)
+            where T : struct, IEquatable<T>
+            =>
+            left.Equals(right);
+
+        public static bool ValueInstancesAreEqual<T>(T left, T right)
+            where T : struct
+            =>
+            left.Equals(right);
 
         public static bool EquatableNullablesAreEqual<T>(T? left, T? right)
             where T : struct, IEquatable<T>
@@ -59,6 +71,25 @@ namespace Fody4Scala
             left == null || right == null
                 ? left == null && right == null
                 : left.Value.Equals(right.Value);
+
+        public static bool EquatableGenericsAreEqual<T>(T left, T right) 
+            where T : IEquatable<T>
+        {
+            IEquatable<T> eLeft = left;
+            IEquatable<T> eRight = right;
+            return ReferenceEquals(eLeft, null) || ReferenceEquals(eRight, null)
+                ? ReferenceEquals(eLeft, eRight)
+                : left.Equals(right);
+        }
+
+        public static bool GenericsAreEqual<T>(T left, T right)
+        {
+            object eLeft = left;
+            object eRight = right;
+            return ReferenceEquals(eLeft, null) || ReferenceEquals(eRight, null)
+                ? ReferenceEquals(eLeft, eRight)
+                : eLeft.Equals(eRight);
+        }
 
         private static Type[] ImplementsGenericInterface(Type type, Type interfaceType) =>
             type

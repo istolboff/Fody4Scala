@@ -40,7 +40,7 @@ namespace AssemblyToProcess
         [CaseClass]
         public static Expression SimpleCollection(
             IEnumerable<int> ints, 
-            IReadOnlyCollection<DateTime> dates, 
+            ICollection<DateTime> dates, 
             List<string> strings,
             decimal[] decimals,
             IEnumerable someThings,
@@ -50,7 +50,45 @@ namespace AssemblyToProcess
         public static Expression OneOf<T, U>(
             IReadOnlyCollection<T> alternatives,
             IEnumerable<U?> anotherSet,
-            ICollection<KeyValuePair<T, U?>> complexOne) where U : struct
+            ICollection<KeyValuePair<T, U?>> complexOne,
+            U[] testArraysOfGenericParameters) where U : struct
         { throw new NotImplementedException(); }
+
+        [CaseClass]
+        public static Expression TestArraysOfGenericParameter<U, W>(
+            U[] elements,
+            W?[] maybeElements,
+            IEnumerable<U>[] metaElements,
+            IEnumerable<KeyValuePair<int, U[]>>[] deeplyNestedGenerics) where W : struct
+        { throw new NotImplementedException(); }
+
+        [CaseClass]
+        public static Expression TestEquatable<T>(IEquatable<DateTime> nonGenericOne, IEquatable<T> genericOne) { throw new NotImplementedException(); }
+    }
+
+    public interface IUnusualCollection<U> : IEnumerable<U>
+    {
+        int Length { get; }
+    }
+
+    public sealed class Something<T> : IEquatable<Something<T>> where T : class
+    {
+        private T _k_BackingField;
+
+        public T Value => _k_BackingField;
+
+        public Something(T value)
+        {
+            _k_BackingField = value;
+        }
+
+        public bool Equals(Something<T> other)
+        {
+            if (!DeepEqualityComparer.ReferenceInstancesAreEqual(_k_BackingField, other._k_BackingField))
+            {
+                return false;
+            }
+            return true;
+        }
     }
 }

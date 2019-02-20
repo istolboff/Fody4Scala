@@ -8,6 +8,7 @@ using Fody;
 using Fody4Scala.Fody;
 using AssemblyToProcess;
 using static Fody4Scala.Tests.Make;
+using System.IO;
 
 namespace Fody4Scala.Tests
 {
@@ -18,7 +19,14 @@ namespace Fody4Scala.Tests
         public static void ApplyFody(TestContext testContext)
         {
             var weavingTask = new ModuleWeaver();
-            var weavingResult = weavingTask.ExecuteTestRun("AssemblyToProcess.dll");
+            var weavingResult = weavingTask.ExecuteTestRun("AssemblyToProcess.dll", afterExecuteCallback: moduleDefinition =>
+            {
+                const string Fody4ScalaDll = "Fody4Scala.dll";
+                string binaryFolderPath = Path.GetDirectoryName(moduleDefinition.FileName);
+                var fody4ScalaAssemblyPath = Path.Combine(binaryFolderPath, Fody4ScalaDll);
+                var tempFodyFolderPath = Path.Combine(binaryFolderPath, "fodytemp");
+                File.Copy(fody4ScalaAssemblyPath, Path.Combine(tempFodyFolderPath, Fody4ScalaDll));
+            });
             WeavedAssembly = weavingResult.Assembly;
         }
 
@@ -146,7 +154,7 @@ namespace Fody4Scala.Tests
 
             foreach (var instanceMakers in new[] { degenerateMakers, variableMakers, moneyMakers, unaryOperatorMakers, binaryOperatorMakers, largeTupleMakers, simpleCollectionMakers })
             {
-                Assert.IsTrue(instanceMakers.Count > 1, $"Check.NonGenericClasses() should generate several instances of {instanceMakers.Single()().GetType().Name}");
+                Assert.IsTrue(instanceMakers.Count > 1, $"Check.NonGenericClasses() should generate several instances of {instanceMakers.First()().GetType().Name}");
                 foreach (var (makeLeft, makeRight) in from makeLeft in instanceMakers
                                               from makeRight in instanceMakers
                                               select (makeLeft, makeRight))
@@ -240,6 +248,11 @@ namespace Fody4Scala.Tests
                 if (t1.IsGenericParameter)
                 {
                     return t2.IsGenericParameter && t1.Name == t2.Name;
+                }
+
+                if (t1.IsArray)
+                {
+                    return t2.IsArray && (TypesAreEqual(t1.GetElementType(), t2.GetElementType()) ?? false); 
                 }
 
                 if (t1.IsConstructedGenericType)

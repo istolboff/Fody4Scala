@@ -1,4 +1,5 @@
-﻿using System.Collections.Generic;
+﻿using System;
+using System.Collections.Generic;
 using System.Diagnostics;
 using System.Linq;
 using Mono.Cecil;
@@ -8,6 +9,79 @@ using Mono.Collections.Generic;
 
 namespace Fody4Scala.Fody
 {
+    internal sealed class WellKnownTypes
+    {
+        public WellKnownTypes(ModuleDefinition moduleDefinition, Func<string, TypeDefinition> findType)
+        {
+            GenericIEquatable = moduleDefinition.ImportReference(findType(typeof(IEquatable<>).FullName));
+            ValueType = moduleDefinition.ImportReference(findType(typeof(ValueType).FullName));
+        }
+
+        public TypeReference GenericIEquatable { get; }
+
+        public TypeReference ValueType { get; }
+    }
+
+    internal sealed class GenericIEquatableInterface
+    {
+        public GenericIEquatableInterface(WellKnownTypes types)
+        {
+            _types = types;
+        }
+
+        public bool IsImplementedBy(TypeReference typeReference)
+        {
+            return typeReference is GenericParameter genericParameter
+                ? new Constraints(genericParameter, _types).Equatable
+                : IsImplementedBy(typeReference.Resolve());
+        }
+
+        public bool IsImplementedBy(TypeDefinition typeDefinition)
+        {
+            var concreteInterface = _types.GenericIEquatable.MakeGenericInstanceType(typeDefinition);
+            return typeDefinition.Interfaces.Any(i => i.InterfaceType.FullName == concreteInterface.FullName);
+        }
+
+        public TypeReference MarkAsImplementedBy(TypeDefinition classDefinition)
+        {
+            var concreteClassType = classDefinition.AsConcreteTypeReference();
+            var concreteInterface = _types.GenericIEquatable.MakeGenericInstanceType(concreteClassType);
+            classDefinition.Interfaces.Add(new InterfaceImplementation(concreteInterface));
+            return concreteClassType;
+        }
+
+        private readonly WellKnownTypes _types;
+    }
+
+    internal class Constraints
+    {
+        public Constraints(GenericParameter genericParameter, WellKnownTypes wellKnownTypes)
+        {
+            _types = wellKnownTypes;
+            _constraints = genericParameter.Constraints;
+            ReferenceType = genericParameter.HasReferenceTypeConstraint;
+        }
+
+        public bool ReferenceType { get; }
+
+        public bool ValueType
+        {
+            get => _constraints.Any(c => c.FullName == _types.ValueType.FullName && c.Namespace == _types.ValueType.Namespace);
+        }
+
+        public bool Equatable
+        {
+            get
+            {
+                var iEquatableInterface = new GenericIEquatableInterface(_types);
+                return _constraints.Any(c => iEquatableInterface.IsImplementedBy(c));
+            }
+        }
+
+        private readonly Collection<TypeReference> _constraints;
+        private readonly WellKnownTypes _types;
+    }
+
     internal static class AdhocExtensions
     {
         public static void AddRange<T>(this Collection<T> @this, IEnumerable<T> elements)
@@ -27,15 +101,6 @@ namespace Fody4Scala.Fody
         public static string PascalCase(this string @this)
         {
             return char.ToUpper(@this.First()).ToString() + @this.Substring(1);
-        }
-
-        public static TypeKind GetTypeKind(this TypeReference @this)
-        {
-            return @this.IsValueType 
-                    ? @this.FullName.StartsWith("System.Nullable`1") 
-                        ? TypeKind.NullableType
-                        : TypeKind.ValueType
-                    : TypeKind.ReferenceType;
         }
 
         public static TypeReference AsConcreteTypeReference(this TypeReference @this)
@@ -79,7 +144,7 @@ namespace Fody4Scala.Fody
         }
 
         public static TypeReference SubstituteGenericParameters(
-            this GenericInstanceType @this, 
+            this GenericInstanceType @this,
             IEnumerable<GenericParameter> genericParameters,
             ModuleDefinition moduleDefinition)
         {
@@ -98,6 +163,11 @@ namespace Fody4Scala.Fody
                         return genericParameters.Single(gp => gp.FullName == argument.FullName);
                     }
 
+                    if (argument is ArrayType arrayType)
+                    {
+                        return arrayType.SubstituteGenericParameters(genericParameters, moduleDefinition);
+                    }
+
                     if (argument.IsGenericInstance && argument is GenericInstanceType genericInstanceType)
                     {
                         return SubstituteGenericParameters(genericInstanceType, genericParameters, moduleDefinition);
@@ -108,6 +178,29 @@ namespace Fody4Scala.Fody
                 .ToArray();
 
             return genericType.MakeGenericInstanceType(substitutedGenericParameters);
+        }
+
+        public static ArrayType SubstituteGenericParameters(
+            this ArrayType @this,
+            IEnumerable<GenericParameter> genericParameters,
+            ModuleDefinition moduleDefinition)
+        {
+            if (@this.ElementType.IsGenericParameter)
+            {
+                return new ArrayType(genericParameters.Single(gp => gp.FullName == @this.ElementType.FullName));
+            }
+
+            if (@this.ElementType is ArrayType arrayType)
+            {
+                return new ArrayType(arrayType.SubstituteGenericParameters(genericParameters, moduleDefinition));
+            }
+
+            if (@this.ElementType is GenericInstanceType genericInstanceType)
+            {
+                return new ArrayType(genericInstanceType.SubstituteGenericParameters(genericParameters, moduleDefinition));
+            }
+
+            return @this;
         }
 
         public static ParameterDefinition ChangeType(this ParameterDefinition @this, TypeReference typeReference)
@@ -146,6 +239,4 @@ namespace Fody4Scala.Fody
 
         private static readonly OpCode[] FirstArguments = new[] { OpCodes.Ldarg_0, OpCodes.Ldarg_1, OpCodes.Ldarg_2, OpCodes.Ldarg_3 };
     }
-
-    internal enum TypeKind { ReferenceType, ValueType, NullableType }
 }
