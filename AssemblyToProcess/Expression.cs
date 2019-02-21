@@ -71,20 +71,24 @@ namespace AssemblyToProcess
         int Length { get; }
     }
 
-    public sealed class Something<T> : IEquatable<Something<T>> where T : class
+    public sealed class Something<T> : Expression, IEquatable<Something<T>> where T : struct
     {
-        private T _k_BackingField;
+        private T k_BackingField;
 
-        public T Value => _k_BackingField;
+        public T Value => k_BackingField;
 
         public Something(T value)
         {
-            _k_BackingField = value;
+            k_BackingField = value;
         }
 
         public bool Equals(Something<T> other)
         {
-            if (!DeepEqualityComparer.ReferenceInstancesAreEqual(_k_BackingField, other._k_BackingField))
+            if (ReferenceEquals(other, null))
+            {
+                return false;
+            }
+            if (!DeepEqualityComparer.ValueInstancesAreEqual<T>(k_BackingField, other.k_BackingField))
             {
                 return false;
             }
@@ -94,6 +98,20 @@ namespace AssemblyToProcess
         public override bool Equals(object obj)
         {
             return Equals(obj as Something<T>);
+        }
+
+        public static bool operator ==(Something<T> left, Something<T> right)
+        {
+            return DeepEqualityComparer.EquatableReferencesAreEqual(left, right);
+        }
+
+        public static bool operator !=(Something<T> left, Something<T> right)
+        {
+            if (!DeepEqualityComparer.EquatableReferencesAreEqual(left, right))
+            {
+                return true;
+            }
+            return false;
         }
     }
 }

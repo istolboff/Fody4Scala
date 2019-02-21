@@ -129,6 +129,8 @@ namespace Fody4Scala.Fody
                 var typedEqualsMethod = ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
                 caseClassTypeDefinition.Methods.Add(typedEqualsMethod);
                 caseClassTypeDefinition.Methods.Add(OverrideObjectEquals(caseClassTypeDefinition, typedEqualsMethod));
+                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, typedEqualsMethod, true));
+                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, typedEqualsMethod, false));
 
                 return caseClassTypeDefinition;
             }
@@ -168,6 +170,17 @@ namespace Fody4Scala.Fody
                 var otherInstance = new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClassType);
                 method.Parameters.Add(otherInstance);
                 var compareCodeEmitter = method.Body.GetILProcessor();
+
+                // if (ReferenceEquals(other, null)) return false;
+                var keepAnalyzingProperties = Instruction.Create(OpCodes.Nop);
+                compareCodeEmitter.Emit(OpCodes.Ldarg_1);
+                compareCodeEmitter.Emit(OpCodes.Ldnull);
+                compareCodeEmitter.Emit(OpCodes.Ceq);
+                compareCodeEmitter.Emit(OpCodes.Brfalse_S, keepAnalyzingProperties);
+                compareCodeEmitter.Emit(OpCodes.Ldc_I4_0);
+                compareCodeEmitter.Emit(OpCodes.Ret);
+                compareCodeEmitter.Append(keepAnalyzingProperties);
+
                 foreach (var property in properties)
                 {
                     property.EmitEqualityCheck(compareCodeEmitter, otherInstance, fieldVarietyDetector);
@@ -190,11 +203,62 @@ namespace Fody4Scala.Fody
                 method.Parameters.Add(otherInstance);
                 var compareCodeEmitter = method.Body.GetILProcessor();
 
+                var concreteCaseClass = caseClassTypeDefinition.AsConcreteTypeReference();
                 compareCodeEmitter.Emit(OpCodes.Ldarg_0);
                 compareCodeEmitter.Emit(OpCodes.Ldarg_1);
-                compareCodeEmitter.Emit(OpCodes.Isinst, caseClassTypeDefinition.AsConcreteTypeReference());
-                compareCodeEmitter.Emit(OpCodes.Call, typedEqualsMethod);
+                compareCodeEmitter.Emit(OpCodes.Isinst, concreteCaseClass);
+                if (concreteCaseClass is GenericInstanceType genericInstanceType)
+                {
+                    var methodToCall = new MethodReference(typedEqualsMethod.Name, typedEqualsMethod.ReturnType, concreteCaseClass) { HasThis = true };
+                    methodToCall.Parameters.Add(new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClass));
+                    compareCodeEmitter.Emit(OpCodes.Call, methodToCall); 
+                }
+                else
+                {
+                    compareCodeEmitter.Emit(OpCodes.Call, typedEqualsMethod);
+                }
                 compareCodeEmitter.Emit(OpCodes.Ret);
+
+                return method;
+            }
+
+            private MethodDefinition MakeEqualityOperator(TypeDefinition caseClassTypeDefinition, MethodDefinition typedEqualsMethod, bool equality)
+            {
+                var method = new MethodDefinition(
+                    equality ? "op_Equality" : "op_Inequality", 
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.SpecialName | MethodAttributes.Static, 
+                    _typeSystem.BooleanReference);
+
+                var concreteCaseClassType = caseClassTypeDefinition.AsConcreteTypeReference();
+                var leftInstance = new ParameterDefinition("left", ParameterAttributes.None, concreteCaseClassType);
+                var rightInstance = new ParameterDefinition("right", ParameterAttributes.None, concreteCaseClassType);
+                method.Parameters.Add(leftInstance);
+                method.Parameters.Add(rightInstance);
+
+                var compareCodeEmitter = method.Body.GetILProcessor();
+                compareCodeEmitter.Emit(OpCodes.Ldarg_0);
+                compareCodeEmitter.Emit(OpCodes.Ldarg_1);
+                var methodToCall = _deepEqualityComparer.GetMethods().Single(m => m.Name == nameof(DeepEqualityComparer.EquatableReferencesAreEqual));
+                var genericMethod = new GenericInstanceMethod(_moduleDefinition.ImportReference(methodToCall));
+                var referencedGenericArgument = concreteCaseClassType;
+                genericMethod.GenericArguments.Add(referencedGenericArgument);
+                compareCodeEmitter.Emit(OpCodes.Call, genericMethod);
+
+                if (equality)
+                {
+                    compareCodeEmitter.Emit(OpCodes.Ret);
+                }
+                else
+                {
+                    var keepAnalyzingProperties = Instruction.Create(OpCodes.Ldc_I4_0);
+                    compareCodeEmitter.Emit(OpCodes.Ldc_I4_0);
+                    compareCodeEmitter.Emit(OpCodes.Ceq);
+                    compareCodeEmitter.Emit(OpCodes.Brfalse_S, keepAnalyzingProperties);
+                    compareCodeEmitter.Emit(OpCodes.Ldc_I4_1);
+                    compareCodeEmitter.Emit(OpCodes.Ret);
+                    compareCodeEmitter.Append(keepAnalyzingProperties);
+                    compareCodeEmitter.Emit(OpCodes.Ret);
+                }
 
                 return method;
             }

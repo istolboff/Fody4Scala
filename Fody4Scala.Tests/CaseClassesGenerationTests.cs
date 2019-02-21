@@ -1,6 +1,7 @@
 ﻿using System;
 using System.Collections;
 using System.Collections.Generic;
+using System.IO;
 using System.Linq;
 using System.Reflection;
 using Microsoft.VisualStudio.TestTools.UnitTesting;
@@ -8,7 +9,6 @@ using Fody;
 using Fody4Scala.Fody;
 using AssemblyToProcess;
 using static Fody4Scala.Tests.Make;
-using System.IO;
 
 namespace Fody4Scala.Tests
 {
@@ -46,7 +46,10 @@ namespace Fody4Scala.Tests
                     nameof(Expression.LargeTuple),
                     nameof(Expression.Func2),
                     nameof(Expression.Maybe),
-                    nameof(Expression.OneOf)
+                    nameof(Expression.OneOf),
+                    nameof(Expression.SimpleCollection),
+                    nameof(Expression.TestArraysOfGenericParameter),
+                    nameof(Expression.TestEquatable)
                 })
             {
                 var generatedClassType = WeavedAssembly
@@ -135,7 +138,6 @@ namespace Fody4Scala.Tests
         [TestMethod]
         public void ValidateGeneratedClassesEqualityComparison()
         {
-            var degenerateMakers = new List<Func<dynamic>>();
             var variableMakers = new List<Func<dynamic>>();
             var moneyMakers = new List<Func<dynamic>>();
             var unaryOperatorMakers = new List<Func<dynamic>>();
@@ -144,7 +146,7 @@ namespace Fody4Scala.Tests
             var simpleCollectionMakers = new List<Func<dynamic>>();
 
             Check.NonGenericClasses(
-                checkDegenerate: (degenerate) => degenerateMakers.Add(degenerate),
+                checkDegenerate: _ => { },
                 checkVariable: (_, variable) => variableMakers.Add(variable),
                 checkMoney: (_, __, money) => moneyMakers.Add(money),
                 checkUnaryOperator: (_, __, unaryOperator) => unaryOperatorMakers.Add(unaryOperator),
@@ -152,7 +154,7 @@ namespace Fody4Scala.Tests
                 checkLargeTuple: (_, __, ___, ____, _______, _________, largeTuple) => largeTupleMakers.Add(largeTuple),
                 checkSimpleCollection: (_, __, ___, ____, _______, _________, simpleCollection) => simpleCollectionMakers.Add(simpleCollection));
 
-            foreach (var instanceMakers in new[] { degenerateMakers, variableMakers, moneyMakers, unaryOperatorMakers, binaryOperatorMakers, largeTupleMakers, simpleCollectionMakers })
+            foreach (var instanceMakers in new[] { variableMakers, moneyMakers, unaryOperatorMakers, binaryOperatorMakers, largeTupleMakers, simpleCollectionMakers })
             {
                 Assert.IsTrue(instanceMakers.Count > 1, $"Check.NonGenericClasses() should generate several instances of {instanceMakers.First()().GetType().Name}");
                 foreach (var (makeLeft, makeRight) in from makeLeft in instanceMakers
@@ -252,7 +254,9 @@ namespace Fody4Scala.Tests
 
                 if (t1.IsArray)
                 {
-                    return t2.IsArray && (TypesAreEqual(t1.GetElementType(), t2.GetElementType()) ?? false); 
+                    return t2.IsArray 
+                        ? TypesAreEqual(t1.GetElementType(), t2.GetElementType())
+                        : false; 
                 }
 
                 if (t1.IsConstructedGenericType)
@@ -312,7 +316,21 @@ namespace Fody4Scala.Tests
                 var unaryOperatorFactory = factoryClassType.GetMethod(nameof(Expression.UnaryOperator));
                 var binaryOperatorFactory = factoryClassType.GetMethod(nameof(Expression.BinaryOperator));
                 var constantMethod = factoryClassType.GetMethod(nameof(Expression.Constant));
-                foreach (var (@operator, leftExpression, rightExpression) in from @operator in stringValues
+                foreach (var (@operator, leftExpression) in
+                                          from @operator in stringValues
+                                          from leftExpression in new dynamic[]
+                                                             {
+                                                              null,
+                                                              factoryClassType.GetMethod(nameof(Expression.Variable)).Invoke(null, new object[] { "oddName" }),
+                                                              constantMethod.MakeGenericMethod(typeof(DateTime)).Invoke(null, new object[] { DateTime.Now })
+                                                             }
+                                          select (@operator, leftExpression))
+                {
+                    checkUnaryOperator(@operator, leftExpression, new Func<dynamic>(() => unaryOperatorFactory.Invoke(null, new object[] { @operator, leftExpression })));
+                }
+
+                foreach (var (@operator, leftExpression, rightExpression) in 
+                                          from @operator in stringValues
                                           from leftExpression in new dynamic[]
                                                              {
                                                               null,
@@ -327,16 +345,17 @@ namespace Fody4Scala.Tests
                                                              }
                                           select (@operator, leftExpression, rightExpression))
                 {
-                    checkUnaryOperator(@operator, leftExpression, new Func<dynamic>(() => unaryOperatorFactory.Invoke(null, new object[] { @operator, leftExpression })));
                     checkBinaryOperator(@operator, leftExpression, rightExpression, new Func<dynamic>(() => binaryOperatorFactory.Invoke(null, new object[] { @operator, leftExpression, rightExpression })));
                 }
 
                 // LargeTuple
                 var largeTupleFactory = factoryClassType.GetMethod(nameof(Expression.LargeTuple));
                 var (item1, item2, item3, item4, item5, item6) = ("Hello!", 42, 146.73M, -256.7454, new DateTime(1000000L), Guid.NewGuid());
-                checkLargeTuple(item1, item2, item3, item4, item5, item6, () => largeTupleFactory.Invoke(null, new object[] { item1, item2, item3, item4, item5, item6 }));
+                var createdValue1 = largeTupleFactory.Invoke(null, new object[] { item1, item2, item3, item4, item5, item6 });
+                checkLargeTuple(item1, item2, item3, item4, item5, item6, () => createdValue1);
                 (item1, item2, item3, item4, item5, item6) = ("World?", 2, 456456.98M, -997.1233, new DateTime(3000000L), Guid.NewGuid());
-                checkLargeTuple(item1, item2, item3, item4, item5, item6, () => largeTupleFactory.Invoke(null, new object[] { item1, item2, item3, item4, item5, item6 }));
+                var createdValue2 = largeTupleFactory.Invoke(null, new object[] { item1, item2, item3, item4, item5, item6 });
+                checkLargeTuple(item1, item2, item3, item4, item5, item6, () => createdValue2);
 
                 // Simple Collection
                 var simpleCollectionFactory = factoryClassType.GetMethod(nameof(Expression.SimpleCollection));
