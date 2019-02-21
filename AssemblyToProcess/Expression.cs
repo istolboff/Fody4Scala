@@ -66,11 +66,6 @@ namespace AssemblyToProcess
         public static Expression TestEquatable<T>(IEquatable<DateTime> nonGenericOne, IEquatable<T> genericOne) { throw new NotImplementedException(); }
     }
 
-    public interface IUnusualCollection<U> : IEnumerable<U>
-    {
-        int Length { get; }
-    }
-
     public sealed class Something<T> : Expression, IEquatable<Something<T>> where T : struct
     {
         private T k_BackingField;
@@ -88,7 +83,7 @@ namespace AssemblyToProcess
             {
                 return false;
             }
-            if (!DeepEqualityComparer.ValueInstancesAreEqual<T>(k_BackingField, other.k_BackingField))
+            if (!DeepEqualityComparer.ValueInstancesAreEqual(k_BackingField, other.k_BackingField))
             {
                 return false;
             }

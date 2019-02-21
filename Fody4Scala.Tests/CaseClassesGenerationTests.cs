@@ -21,19 +21,19 @@ namespace Fody4Scala.Tests
             var weavingTask = new ModuleWeaver();
             var weavingResult = weavingTask.ExecuteTestRun("AssemblyToProcess.dll", afterExecuteCallback: moduleDefinition =>
             {
-                const string Fody4ScalaDll = "Fody4Scala.dll";
+                const string fody4ScalaDll = "Fody4Scala.dll";
                 string binaryFolderPath = Path.GetDirectoryName(moduleDefinition.FileName);
-                var fody4ScalaAssemblyPath = Path.Combine(binaryFolderPath, Fody4ScalaDll);
+                var fody4ScalaAssemblyPath = Path.Combine(binaryFolderPath, fody4ScalaDll);
                 var tempFodyFolderPath = Path.Combine(binaryFolderPath, "fodytemp");
-                File.Copy(fody4ScalaAssemblyPath, Path.Combine(tempFodyFolderPath, Fody4ScalaDll));
+                File.Copy(fody4ScalaAssemblyPath, Path.Combine(tempFodyFolderPath, fody4ScalaDll));
             });
-            WeavedAssembly = weavingResult.Assembly;
+            _weavedAssembly = weavingResult.Assembly;
         }
 
         [TestMethod]
         public void ValidateGeneratedClassesStructure()
         {
-            var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
+            var factoryClassType = _weavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
             foreach (var factoryMethodName in new[]
                 {
                     nameof(Expression.Degenerate),
@@ -52,7 +52,7 @@ namespace Fody4Scala.Tests
                     nameof(Expression.TestEquatable)
                 })
             {
-                var generatedClassType = WeavedAssembly
+                var generatedClassType = _weavedAssembly
                     .GetTypes()
                     .Single(
                         ti => ti.Name == factoryMethodName || 
@@ -168,7 +168,7 @@ namespace Fody4Scala.Tests
             }
         }
 
-        private static Assembly WeavedAssembly;
+        private static Assembly _weavedAssembly;
 
         private class CaseClassValidator
         {
@@ -287,7 +287,7 @@ namespace Fody4Scala.Tests
                 Action<string, int, decimal, double?, DateTime, Guid, Func<dynamic>> checkLargeTuple,
                 Action<IEnumerable<int>, IReadOnlyCollection<DateTime>, List<string>, decimal[], IEnumerable, ArrayList, Func<dynamic>> checkSimpleCollection)
             {
-                var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
+                var factoryClassType = _weavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
 
                 // Degenerate
                 var degenerateFactory = factoryClassType.GetMethod(nameof(Expression.Degenerate));
@@ -305,7 +305,7 @@ namespace Fody4Scala.Tests
                 // Money
                 var moneyFactory = factoryClassType.GetMethod(nameof(Expression.Money));
                 foreach (var (amount, currency) in 
-                            from amount in new decimal[] { 0, 100, 345.678M, -30000, -4576.67M, decimal.MaxValue, decimal.MinValue }
+                            from amount in new[] { 0, 100, 345.678M, -30000, -4576.67M, decimal.MaxValue, decimal.MinValue }
                             from currency in new[] { null, string.Empty, "USD", "EUR" }
                             select (amount, currency))
                 {
@@ -375,9 +375,9 @@ namespace Fody4Scala.Tests
 
             public static void GenericClasses(CheckingGenericClassLogic checkingGenericClassLogic)
             {
-                var factoryClassType = WeavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
+                var factoryClassType = _weavedAssembly.GetTypes().Single(ti => ti.Name == nameof(Expression));
 
-                void CheckGenericFactoryMethod<T, U>(MethodInfo factoryMethod, params U[] values)
+                void CheckGenericFactoryMethod<T, TU>(MethodInfo factoryMethod, params TU[] values)
                 {
                     MethodInfo concreteFactoryMethod = factoryMethod.MakeGenericMethod(typeof(T));
                     foreach (var value in values)
@@ -408,22 +408,27 @@ namespace Fody4Scala.Tests
 
                 // Fun2
                 dynamic fun2 = factoryClassType.GetMethod(nameof(Expression.Func2))
-                    .MakeGenericMethod(typeof(decimal), typeof(string), typeof(Dictionary<double, DateTime>))
-                    .Invoke(null, new object[] { 43.67M, "Meow!", new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } } });
-                Assert.AreEqual(43.67M, (decimal)fun2.Arg1);
-                Assert.AreEqual("Meow!", (string)fun2.Arg2);
-                Assert.IsTrue(new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } }.SequenceEqual((Dictionary<double, DateTime>)fun2.Result));
+                    .MakeGenericMethod(typeof(decimal), typeof(string), typeof(Dictionary<double, DateTime>));
+                foreach (var (arg1, arg2, result) in new[] 
+                                        {
+                                            (43.67M, "Meow!", new Dictionary<double, DateTime> { { 1.23, new DateTime(100000) } }),
+                                            (-1534.104M, "Arf?", new Dictionary<double, DateTime> { { 6.45, new DateTime(200000) } })
+                                        })
+                {
+                    checkingGenericClassLogic.CheckFun2(arg1, arg2, result, () => fun2.Invoke(null, new object[] { arg1, arg2, result }));
+                }
             }
 
             public static void Equality(dynamic left, dynamic right, bool expectedToBeEqual)
             {
                 Assert.AreEqual(left.GetType(), right.GetType());
-                var methodInfo = typeof(Check)
+                var genericMethodInfo = typeof(Check)
                     .GetMethod(
-                        expectedToBeEqual ? "CheckEqualityCore" : "CheckInequalityCore", 
-                        BindingFlags.NonPublic | BindingFlags.Static)
-                    .MakeGenericMethod(left.GetType());
-                methodInfo.Invoke(null, new[] { left, right });
+                        expectedToBeEqual ? nameof(CheckEqualityCore) : nameof(CheckInequalityCore),
+                        BindingFlags.NonPublic | BindingFlags.Static);
+                Assert.IsNotNull(genericMethodInfo, "Make ReSharper happy.");
+                var concreteMethodInfo = genericMethodInfo.MakeGenericMethod(left.GetType());
+                concreteMethodInfo.Invoke(null, new[] { left, right });
             }
 
             private static void CheckEqualityCore<T>(T left, T right) where T : IEquatable<T>
@@ -444,9 +449,10 @@ namespace Fody4Scala.Tests
 
             private static bool CallEqualityOperator<T>(T left, T right, bool equality)
             {
-                return (bool)typeof(T)
-                    .GetMethod(equality ? "op_Equality" : "op_Inequality", BindingFlags.Static | BindingFlags.Public)
-                    .Invoke(null, new object[] { left, right });
+                var operatorMethod = typeof(T)
+                    .GetMethod(equality ? "op_Equality" : "op_Inequality", BindingFlags.Static | BindingFlags.Public);
+                Assert.IsNotNull(operatorMethod, $"{typeof(T).Name}.operator{(equality ? "==" : "!=")} should be implemented.");
+                return (bool)operatorMethod.Invoke(null, new object[] { left, right });
             }
         }
 
@@ -470,7 +476,7 @@ namespace Fody4Scala.Tests
                 var fun2 = makeFun2();
                 Assert.AreEqual(arg1, fun2.Arg1);
                 Assert.AreEqual(arg2, fun2.Arg2);
-                Assert.AreEqual(result, fun2.Result);
+                Assert.IsTrue(DeepEqualityComparer.Default<TResult>().Equals(result, fun2.Result));
             }
         }
     }

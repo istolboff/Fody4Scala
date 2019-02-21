@@ -16,7 +16,7 @@ namespace Fody4Scala.Fody
             var fieldVarietyDetector = new FieldVarietyDetector(new WellKnownTypes(ModuleDefinition, FindType));
             foreach (var (caseClassesFactory, factoryMethods) in GetAllCaseClassFactoryMethodsGroupedByOwningClass())
             {
-                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem, FindType);
+                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem);
                 foreach (var factoryMethod in factoryMethods)
                 {
                     var caseClassTypeDefinition = caseClassBuilder.BuildCaseClass(factoryMethod, fieldVarietyDetector);
@@ -58,7 +58,7 @@ namespace Fody4Scala.Fody
             }
             else
             {
-                var genericInstanceType = caseClassTypeDefinition.MakeGenericInstanceType(caseClassFactoryMethod.GenericParameters.ToArray());
+                var genericInstanceType = caseClassTypeDefinition.MakeGenericInstanceType(caseClassFactoryMethod.GenericParameters);
                 caseClassFactoryMethod.ReturnType = genericInstanceType;
                 constructor = genericInstanceType.MakeGenericInstanceConstructor();
             }
@@ -84,15 +84,13 @@ namespace Fody4Scala.Fody
         private class CaseClassBuilder
         {
             public CaseClassBuilder(
-                TypeDefinition caseClassesFactory, 
+                TypeDefinition caseClassesFactory,
                 ModuleDefinition moduleDefinition,
-                global::Fody.TypeSystem typeSystem,
-                Func<string, TypeDefinition> findType)
+                global::Fody.TypeSystem typeSystem)
             {
                 _factoryType = caseClassesFactory;
                 _moduleDefinition = moduleDefinition;
                 _typeSystem = typeSystem;
-                _findType = findType;
                 _deepEqualityComparer = _moduleDefinition.ImportReference(typeof(DeepEqualityComparer)).Resolve();
             }
 
@@ -109,7 +107,7 @@ namespace Fody4Scala.Fody
                         .Select(genericParameter => genericParameter.CloneWith(caseClassTypeDefinition)));
 
                 var genericInstanceType = factoryMethod.GenericParameters.Any()
-                        ? caseClassTypeDefinition.MakeGenericInstanceType(caseClassTypeDefinition.GenericParameters.ToArray())
+                        ? caseClassTypeDefinition.MakeGenericInstanceType(caseClassTypeDefinition.GenericParameters)
                         : null;
 
                 var properties = factoryMethod.Parameters.Select((p, i) =>
@@ -129,8 +127,8 @@ namespace Fody4Scala.Fody
                 var typedEqualsMethod = ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
                 caseClassTypeDefinition.Methods.Add(typedEqualsMethod);
                 caseClassTypeDefinition.Methods.Add(OverrideObjectEquals(caseClassTypeDefinition, typedEqualsMethod));
-                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, typedEqualsMethod, true));
-                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, typedEqualsMethod, false));
+                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, true));
+                caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, false));
 
                 return caseClassTypeDefinition;
             }
@@ -183,7 +181,7 @@ namespace Fody4Scala.Fody
 
                 foreach (var property in properties)
                 {
-                    property.EmitEqualityCheck(compareCodeEmitter, otherInstance, fieldVarietyDetector);
+                    property.EmitEqualityCheck(compareCodeEmitter, fieldVarietyDetector);
                 }
 
                 compareCodeEmitter.Emit(OpCodes.Ldc_I4_1);
@@ -207,7 +205,7 @@ namespace Fody4Scala.Fody
                 compareCodeEmitter.Emit(OpCodes.Ldarg_0);
                 compareCodeEmitter.Emit(OpCodes.Ldarg_1);
                 compareCodeEmitter.Emit(OpCodes.Isinst, concreteCaseClass);
-                if (concreteCaseClass is GenericInstanceType genericInstanceType)
+                if (concreteCaseClass is GenericInstanceType)
                 {
                     var methodToCall = new MethodReference(typedEqualsMethod.Name, typedEqualsMethod.ReturnType, concreteCaseClass) { HasThis = true };
                     methodToCall.Parameters.Add(new ParameterDefinition("other", ParameterAttributes.None, concreteCaseClass));
@@ -222,7 +220,7 @@ namespace Fody4Scala.Fody
                 return method;
             }
 
-            private MethodDefinition MakeEqualityOperator(TypeDefinition caseClassTypeDefinition, MethodDefinition typedEqualsMethod, bool equality)
+            private MethodDefinition MakeEqualityOperator(TypeDefinition caseClassTypeDefinition, bool equality)
             {
                 var method = new MethodDefinition(
                     equality ? "op_Equality" : "op_Inequality", 
@@ -280,7 +278,6 @@ namespace Fody4Scala.Fody
             private readonly TypeDefinition _factoryType;
             private readonly ModuleDefinition _moduleDefinition;
             private readonly global::Fody.TypeSystem _typeSystem;
-            private readonly Func<string, TypeDefinition> _findType;
             private readonly TypeDefinition _deepEqualityComparer;
         }
 
@@ -298,7 +295,7 @@ namespace Fody4Scala.Fody
                 _parameterIndex = parameterIndex;
                 _deepEqualityComparer = deepEqualityComparer;
                 _moduleDefinition = moduleDefinition;
-                CtorParameter = MakeConstructorParameter(genericParameters, moduleDefinition);
+                CtorParameter = MakeConstructorParameter(genericParameters.ToArray(), moduleDefinition);
 
                 BackingField = new FieldDefinition(
                     $"<{factoryMethodParameter.Name}>k_BackingField",
@@ -347,10 +344,7 @@ namespace Fody4Scala.Fody
                 ctorBodyEmitter.Emit(OpCodes.Stfld, _backingFieldReference);
             }
 
-            public void EmitEqualityCheck(
-                ILProcessor compareCodeEmitter,
-                ParameterDefinition otherInstance,
-                FieldVarietyDetector fieldVarietyDetector)
+            public void EmitEqualityCheck(ILProcessor compareCodeEmitter, FieldVarietyDetector fieldVarietyDetector)
             {
                 switch (fieldVarietyDetector.Detect(_backingFieldReference.FieldType))
                 {
@@ -368,7 +362,7 @@ namespace Fody4Scala.Fody
                             typedCollection.ElementType);
                         break;
 
-                    case UntypedColection untypedColection:
+                    case UntypedColection _:
                         EmitFieldEqualityTestingCode(
                             compareCodeEmitter,
                             nameof(DeepEqualityComparer.UntypedCollectionsAreEqual));
@@ -475,7 +469,7 @@ namespace Fody4Scala.Fody
             }
 
             private ParameterDefinition MakeConstructorParameter(
-                ICollection<GenericParameter> genericParameters,
+                IReadOnlyCollection<GenericParameter> genericParameters,
                 ModuleDefinition moduleDefinition)
             {
                 if (_factoryMethodParameter.ParameterType.IsGenericParameter)
@@ -485,7 +479,7 @@ namespace Fody4Scala.Fody
                 }
 
                 if (_factoryMethodParameter.ParameterType is ArrayType arrayType &&
-                    (arrayType.ElementType.IsGenericParameter || arrayType.ElementType is GenericInstanceType genericElementType))
+                    (arrayType.ElementType.IsGenericParameter || arrayType.ElementType is GenericInstanceType))
                 {
                     return _factoryMethodParameter.ChangeType(
                         arrayType.SubstituteGenericParameters(genericParameters, moduleDefinition));

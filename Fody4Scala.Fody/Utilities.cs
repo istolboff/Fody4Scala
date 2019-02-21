@@ -64,10 +64,8 @@ namespace Fody4Scala.Fody
 
         public bool ReferenceType { get; }
 
-        public bool ValueType
-        {
-            get => _constraints.Any(c => c.FullName == _types.ValueType.FullName && c.Namespace == _types.ValueType.Namespace);
-        }
+        public bool ValueType => 
+            _constraints.Any(c => c.FullName == _types.ValueType.FullName && c.Namespace == _types.ValueType.Namespace);
 
         public bool Equatable
         {
@@ -86,12 +84,6 @@ namespace Fody4Scala.Fody
     {
         public static void AddRange<T>(this Collection<T> @this, IEnumerable<T> elements)
         {
-            if (@this is List<T> list)
-            {
-                list.AddRange(elements);
-                return;
-            }
-
             foreach (var element in elements)
             {
                 @this.Add(element);
@@ -103,10 +95,17 @@ namespace Fody4Scala.Fody
             return char.ToUpper(@this.First()).ToString() + @this.Substring(1);
         }
 
+        public static GenericInstanceType MakeGenericInstanceType(
+            this TypeReference @this, 
+            Collection<GenericParameter> genericParameters)
+        {
+            return @this.MakeGenericInstanceType(genericParameters.Select(gp => (TypeReference)gp).ToArray());
+        }
+
         public static TypeReference AsConcreteTypeReference(this TypeReference @this)
         {
             return @this.HasGenericParameters
-                ? @this.MakeGenericInstanceType(@this.GenericParameters.ToArray())
+                ? @this.MakeGenericInstanceType(@this.GenericParameters)
                 : @this;
         }
 
@@ -145,7 +144,7 @@ namespace Fody4Scala.Fody
 
         public static TypeReference SubstituteGenericParameters(
             this GenericInstanceType @this,
-            IEnumerable<GenericParameter> genericParameters,
+            IReadOnlyCollection<GenericParameter> genericParameters,
             ModuleDefinition moduleDefinition)
         {
             var genericType = moduleDefinition.ImportReference(@this.Resolve());
@@ -155,8 +154,6 @@ namespace Fody4Scala.Fody
                 .Select(i =>
                 {
                     var argument = @this.GenericArguments[i];
-                    var parameter = genericType.GenericParameters[i];
-
                     if (argument.IsGenericParameter)
                     {
                         Debug.Assert(genericParameters.Any(gp => gp.FullName == argument.FullName));
@@ -182,7 +179,7 @@ namespace Fody4Scala.Fody
 
         public static ArrayType SubstituteGenericParameters(
             this ArrayType @this,
-            IEnumerable<GenericParameter> genericParameters,
+            IReadOnlyCollection<GenericParameter> genericParameters,
             ModuleDefinition moduleDefinition)
         {
             if (@this.ElementType.IsGenericParameter)

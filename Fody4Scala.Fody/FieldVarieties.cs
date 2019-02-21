@@ -78,9 +78,8 @@ namespace Fody4Scala.Fody
                         return new TypedCollection(elementType);
                     }
 
-                    var fieldIsUntypedCollection = !fieldIsTypedCollection &&
-                                                   (IsIEnumerable(resolvedFieldType) ||
-                                                    resolvedFieldType.Interfaces.Any(i => IsIEnumerable(i.InterfaceType)));
+                    var fieldIsUntypedCollection = IsIEnumerable(resolvedFieldType) ||
+                                                   resolvedFieldType.Interfaces.Any(i => IsIEnumerable(i.InterfaceType));
                     if (fieldIsUntypedCollection)
                     {
                         return new UntypedColection();

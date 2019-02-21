@@ -10,17 +10,14 @@ namespace Fody4Scala
     {
         public static IEqualityComparer<T> Default<T>()
         {
-            var enumerableOfT = ImplementsGenericInterface(typeof(T), typeof(IEnumerable<>));
+            var enumerableOfT = ImplementsGenericInterface(typeof(T));
             return enumerableOfT == null
                 ? EqualityComparer<T>.Default
                 : (IEqualityComparer<T>)typeof(DeepEqualityComparer)
-                    .GetMethod(nameof(ForEnumerables), BindingFlags.Public | BindingFlags.Static)
-                    .MakeGenericMethod(enumerableOfT.Single())
+                    .GetMethod(nameof(ForEnumerables), BindingFlags.NonPublic | BindingFlags.Static)
+                    ?.MakeGenericMethod(enumerableOfT.Single())
                     .Invoke(null, new object[] { });
         }
-
-        public static IEqualityComparer<IEnumerable<T>> ForEnumerables<T>() =>
-            new EnumerablesComparer<T>();
 
         public static bool EquatableReferencesAreEqual<T>(T left, T right) 
             where T : class, IEquatable<T> 
@@ -91,7 +88,10 @@ namespace Fody4Scala
                 : eLeft.Equals(eRight);
         }
 
-        private static Type[] ImplementsGenericInterface(Type type, Type interfaceType) =>
+        private static IEqualityComparer<IEnumerable<T>> ForEnumerables<T>() =>
+            new EnumerablesComparer<T>();
+
+        private static Type[] ImplementsGenericInterface(Type type) =>
             type
                 .GetInterfaces()
                 .Where(i => i.IsGenericType)
@@ -107,7 +107,7 @@ namespace Fody4Scala
                     : x.SequenceEqual(y, Default<T>());
 
             public int GetHashCode(IEnumerable<T> obj) =>
-                obj?.GetHashCode() ?? 0;
+                obj.GetHashCode();
         }
     }
 }
