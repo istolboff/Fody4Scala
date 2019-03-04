@@ -69,6 +69,8 @@ namespace AssemblyToProcess
     public sealed class Something<T> : Expression, IEquatable<Something<T>> where T : struct
     {
         private T k_BackingField;
+        private int k_BackingField1;
+        private Guid k_BackingField2;
 
         public T Value => k_BackingField;
 
@@ -88,6 +90,11 @@ namespace AssemblyToProcess
                 return false;
             }
             return true;
+        }
+
+        public override string ToString()
+        {
+            return $"Something(f1: {k_BackingField}, f2:{k_BackingField1}, f3:{k_BackingField2}, f4:{100}, f5:{400M}, f6:{4.565765}, f7: {455}, f8:{-566}, f9:{5555})";
         }
 
         public override bool Equals(object obj)

@@ -168,6 +168,34 @@ namespace Fody4Scala.Tests
             }
         }
 
+        [TestMethod]
+        public void ValidateGeneratedClassesToString()
+        {
+            Check.NonGenericClasses(
+                checkDegenerate: (createDegenerate) => 
+                    Assert.AreEqual("Degenerate()", createDegenerate().ToString()),
+                checkVariable: (variableName, createVariable) =>
+                    Assert.AreEqual($"Variable(name: {variableName})", createVariable().ToString()),
+                checkMoney: (amount, currencyName, createMoney) =>
+                    Assert.AreEqual($"Money(amount: {amount}, currency: {currencyName})", createMoney().ToString()),
+                checkUnaryOperator: (@operator, expression, createUnaryOperator) =>
+                    Assert.AreEqual($"UnaryOperator(operator: {@operator}, expression: {expression})", createUnaryOperator().ToString()),
+                checkBinaryOperator: (@operator, leftExpression, rightExpression, createBinaryOperator) =>
+                    Assert.AreEqual(
+                        $"BinaryOperator(operator: {@operator}, leftExpression: {leftExpression}, rightExpression: {rightExpression})", 
+                        createBinaryOperator().ToString()),
+                checkLargeTuple: (item1, item2, item3, item4, item5, item6, createLargeTuple) =>
+                    Assert.AreEqual(
+                        $"LargeTuple(item1: {item1}, item2: {item2}, item3: {item3}, item4: {item4}, item5: {item5}, item6: {item6})",
+                        createLargeTuple().ToString()),
+                checkSimpleCollection: (ints, dates, strings, decimals, someThings, someOtherThings, createSimpleCollection) =>
+                    Assert.AreEqual(
+                        $"SimpleCollection(ints: {ints}, dates: {dates}, strings: {strings}, decimals: {decimals}, someThings: {someThings}, someOtherThings: {someOtherThings})",
+                        createSimpleCollection().ToString()));
+
+            Check.GenericClasses(new CheckingGenericClassToString());
+        }
+
         private static Assembly _weavedAssembly;
 
         private class CaseClassValidator
@@ -463,7 +491,7 @@ namespace Fody4Scala.Tests
             public abstract void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2);
         }
 
-        private class CheckingGenericClassProperties : CheckingGenericClassLogic
+        private sealed class CheckingGenericClassProperties : CheckingGenericClassLogic
         {
             public override void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeInstance)
             {
@@ -477,6 +505,20 @@ namespace Fody4Scala.Tests
                 Assert.AreEqual(arg1, fun2.Arg1);
                 Assert.AreEqual(arg2, fun2.Arg2);
                 Assert.IsTrue(DeepEqualityComparer.Default<TResult>().Equals(result, fun2.Result));
+            }
+        }
+
+        private sealed class CheckingGenericClassToString : CheckingGenericClassLogic
+        {
+            public override void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeInstance)
+            {
+                var instance = makeInstance();
+                Assert.AreEqual($"{instance.GetType().Name}(value: {value})", instance.ToString());
+            }
+
+            public override void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2)
+            {
+                Assert.AreEqual($"Func2`3(arg1: {arg1}, arg2: {arg2}, result: {result})", makeFun2().ToString());
             }
         }
     }

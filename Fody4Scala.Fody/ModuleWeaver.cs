@@ -123,6 +123,7 @@ namespace Fody4Scala.Fody
                 caseClassTypeDefinition.Properties.AddRange(properties.Select(p => p.Property));
                 caseClassTypeDefinition.Methods.AddRange(properties.Select(p => p.PropertyGetter));
                 caseClassTypeDefinition.Methods.Add(GenerateConstructor(properties));
+                caseClassTypeDefinition.Methods.Add(OverrideToString(caseClassTypeDefinition, properties));
 
                 var typedEqualsMethod = ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
                 caseClassTypeDefinition.Methods.Add(typedEqualsMethod);
@@ -153,6 +154,47 @@ namespace Fody4Scala.Fody
                 return ctor;
             }
 
+            private MethodDefinition OverrideToString(TypeDefinition caseClassTypeDefinition, CaseClassProperty[] properties)
+            {
+                var method = new MethodDefinition(
+                    nameof(object.ToString),
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual,
+                    _typeSystem.StringReference);
+
+                var codeEmitter = method.Body.GetILProcessor();
+                codeEmitter.Emit(OpCodes.Ldstr, $"{caseClassTypeDefinition.Name}({string.Join(", ", properties.Select(p => p.AsFormat()))})");
+
+                if (!properties.Any())
+                {
+                    codeEmitter.Emit(OpCodes.Ret);
+                    return method;
+                }
+
+                codeEmitter.Emit(OpCodes.Ldc_I4_S, (sbyte)properties.Length);
+                codeEmitter.Emit(OpCodes.Newarr, _typeSystem.ObjectReference);
+
+                foreach (var property in properties)
+                {
+                    codeEmitter.Emit(OpCodes.Dup);
+                    codeEmitter.Emit(OpCodes.Ldc_I4_S, (sbyte)property.Index);
+                    codeEmitter.Emit(OpCodes.Ldarg_0);
+                    codeEmitter.Emit(OpCodes.Ldfld, property.BackingFieldReference);
+                    codeEmitter.Emit(OpCodes.Box, property.BackingFieldReference.FieldType);
+                    codeEmitter.Emit(OpCodes.Stelem_Ref);
+                }
+
+                var formatMethod = _typeSystem.StringDefinition
+                    .GetMethods()
+                    .Single(m => 
+                        m.Name == "Format" && 
+                        m.Parameters.Count == 2 &&
+                        m.Parameters.Last().CustomAttributes.Any(ca => ca.AttributeType.FullName == typeof(ParamArrayAttribute).FullName));
+                codeEmitter.Emit(OpCodes.Call, _moduleDefinition.ImportReference(formatMethod));
+                codeEmitter.Emit(OpCodes.Ret);
+
+                return method;
+            }
+
             private MethodDefinition ImplementIEquatable(
                 TypeDefinition caseClassTypeDefinition, 
                 CaseClassProperty[] properties,
@@ -161,7 +203,7 @@ namespace Fody4Scala.Fody
                 var concreteCaseClassType = fieldVarietyDetector.GenericIEquatable.MarkAsImplementedBy(caseClassTypeDefinition);
 
                 var method = new MethodDefinition(
-                    "Equals", 
+                    nameof(IEquatable<object>.Equals), 
                     MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual, 
                     _typeSystem.BooleanReference);
 
@@ -193,7 +235,7 @@ namespace Fody4Scala.Fody
             private MethodDefinition OverrideObjectEquals(TypeDefinition caseClassTypeDefinition, MethodDefinition typedEqualsMethod)
             {
                 var method = new MethodDefinition(
-                    "Equals", 
+                    nameof(object.Equals), 
                     MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual, 
                     _typeSystem.BooleanReference);
 
@@ -292,7 +334,7 @@ namespace Fody4Scala.Fody
                 ModuleDefinition moduleDefinition)
             {
                 _factoryMethodParameter = factoryMethodParameter;
-                _parameterIndex = parameterIndex;
+                Index = parameterIndex;
                 _deepEqualityComparer = deepEqualityComparer;
                 _moduleDefinition = moduleDefinition;
                 CtorParameter = MakeConstructorParameter(genericParameters.ToArray(), moduleDefinition);
@@ -302,7 +344,7 @@ namespace Fody4Scala.Fody
                     FieldAttributes.Private,
                     CtorParameter.ParameterType);
 
-                _backingFieldReference = genericInstanceType == null
+                BackingFieldReference = genericInstanceType == null
                     ? BackingField
                     : new FieldReference(BackingField.Name, BackingField.FieldType, genericInstanceType);
 
@@ -319,7 +361,7 @@ namespace Fody4Scala.Fody
 
                 var getter = PropertyGetter.Body.GetILProcessor();
                 getter.Emit(OpCodes.Ldarg_0);
-                getter.Emit(OpCodes.Ldfld, _backingFieldReference);
+                getter.Emit(OpCodes.Ldfld, BackingFieldReference);
                 getter.Emit(OpCodes.Ret);
 
                 Property = new PropertyDefinition(propertyName, PropertyAttributes.None, CtorParameter.ParameterType)
@@ -329,7 +371,11 @@ namespace Fody4Scala.Fody
                 };
             }
 
+            public int Index { get; }
+
             public ParameterDefinition CtorParameter { get; }
+
+            public FieldReference BackingFieldReference { get; }
 
             public FieldDefinition BackingField { get; }
 
@@ -337,16 +383,21 @@ namespace Fody4Scala.Fody
 
             public PropertyDefinition Property { get; }
 
+            public string AsFormat()
+            {
+                return $"{_factoryMethodParameter.Name}: {{{Index}}}";
+            }
+
             public void InitializeBackingFieldValue(ILProcessor ctorBodyEmitter, Collection<ParameterDefinition> ctorParameters)
             {
                 ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
-                ctorBodyEmitter.EmitLoadNthArgument(_parameterIndex, ctorParameters, fromStaticMethod: false);
-                ctorBodyEmitter.Emit(OpCodes.Stfld, _backingFieldReference);
+                ctorBodyEmitter.EmitLoadNthArgument(Index, ctorParameters, fromStaticMethod: false);
+                ctorBodyEmitter.Emit(OpCodes.Stfld, BackingFieldReference);
             }
 
             public void EmitEqualityCheck(ILProcessor compareCodeEmitter, FieldVarietyDetector fieldVarietyDetector)
             {
-                switch (fieldVarietyDetector.Detect(_backingFieldReference.FieldType))
+                switch (fieldVarietyDetector.Detect(BackingFieldReference.FieldType))
                 {
                     case ReferenceTypeImplementingIEquatable referenceTypeImplementingIEquatable:
                         EmitFieldEqualityTestingCode(
@@ -455,9 +506,9 @@ namespace Fody4Scala.Fody
             {
                 var keepAnalyzingProperties = Instruction.Create(OpCodes.Nop);
                 compareCodeEmitter.Emit(OpCodes.Ldarg_0);
-                compareCodeEmitter.Emit(OpCodes.Ldfld, _backingFieldReference);
+                compareCodeEmitter.Emit(OpCodes.Ldfld, BackingFieldReference);
                 compareCodeEmitter.Emit(OpCodes.Ldarg_1);
-                compareCodeEmitter.Emit(OpCodes.Ldfld, _backingFieldReference);
+                compareCodeEmitter.Emit(OpCodes.Ldfld, BackingFieldReference);
                 var methodToCall = _deepEqualityComparer.GetMethods().Single(m => m.Name == deepEqualityComparingMethodName);
                 compareCodeEmitter.Emit(OpCodes.Call, adjustMethod(_moduleDefinition.ImportReference(methodToCall)));
                 compareCodeEmitter.Emit(OpCodes.Ldc_I4_0);
@@ -497,10 +548,8 @@ namespace Fody4Scala.Fody
             }
 
             private readonly ParameterDefinition _factoryMethodParameter;
-            private readonly int _parameterIndex;
             private readonly TypeDefinition _deepEqualityComparer;
             private readonly ModuleDefinition _moduleDefinition;
-            private readonly FieldReference _backingFieldReference;
         }
     }
 }
