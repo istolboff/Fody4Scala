@@ -23,6 +23,9 @@ namespace AssemblyToProcess
         public static Expression Maybe<T>(T? value) where T : struct { throw new NotImplementedException(); }
 
         [CaseClass]
+        public static Expression Any<T>(T value) { throw new NotImplementedException(); }
+
+        [CaseClass]
         public static Expression Money(decimal amount, string currency) { throw new NotImplementedException(); }
 
         [CaseClass]
@@ -66,54 +69,23 @@ namespace AssemblyToProcess
         public static Expression TestEquatable<T>(IEquatable<DateTime> nonGenericOne, IEquatable<T> genericOne) { throw new NotImplementedException(); }
     }
 
-    public sealed class Something<T> : Expression, IEquatable<Something<T>> where T : struct
+    public sealed class Something
     {
-        private T k_BackingField;
-        private int k_BackingField1;
-        private Guid k_BackingField2;
+        private readonly decimal amount;
+        private readonly string currency;
 
-        public T Value => k_BackingField;
-
-        public Something(T value)
+        public Something(decimal amount, string currency)
         {
-            k_BackingField = value;
+            this.amount = amount;
+            this.currency = currency;
         }
 
-        public bool Equals(Something<T> other)
+        public override int GetHashCode()
         {
-            if (ReferenceEquals(other, null))
+            unchecked
             {
-                return false;
+                return (857327845 * -1521134295 + amount.GetHashCode()) * -1521134295 + (currency?.GetHashCode() ?? 0);
             }
-            if (!DeepEqualityComparer.ValueInstancesAreEqual(k_BackingField, other.k_BackingField))
-            {
-                return false;
-            }
-            return true;
-        }
-
-        public override string ToString()
-        {
-            return $"Something(f1: {k_BackingField}, f2:{k_BackingField1}, f3:{k_BackingField2}, f4:{100}, f5:{400M}, f6:{4.565765}, f7: {455}, f8:{-566}, f9:{5555})";
-        }
-
-        public override bool Equals(object obj)
-        {
-            return Equals(obj as Something<T>);
-        }
-
-        public static bool operator ==(Something<T> left, Something<T> right)
-        {
-            return DeepEqualityComparer.EquatableReferencesAreEqual(left, right);
-        }
-
-        public static bool operator !=(Something<T> left, Something<T> right)
-        {
-            if (!DeepEqualityComparer.EquatableReferencesAreEqual(left, right))
-            {
-                return true;
-            }
-            return false;
         }
     }
 }

@@ -177,6 +177,19 @@ namespace Fody4Scala.Fody
             return genericType.MakeGenericInstanceType(substitutedGenericParameters);
         }
 
+        public static GenericInstanceMethod ToGenericInstanceMethod(
+            this MethodReference methodToCall, 
+            TypeReference methodGenericArgument, 
+            ModuleDefinition moduleDefinition)
+        {
+            var genericMethod = new GenericInstanceMethod(methodToCall);
+            var referencedGenericArgument = methodGenericArgument.IsGenericParameter
+                ? methodGenericArgument
+                : moduleDefinition.ImportReference(methodGenericArgument);
+            genericMethod.GenericArguments.Add(referencedGenericArgument);
+            return genericMethod;
+        }
+
         public static ArrayType SubstituteGenericParameters(
             this ArrayType @this,
             IReadOnlyCollection<GenericParameter> genericParameters,

@@ -38,8 +38,8 @@ namespace Fody4Scala.Fody
             }
 
             return only.Equatable 
-                ? (FieldVariety)new GenericTypeImplementingIEquatable(genericParameter) 
-                : new PlainGenericType(genericParameter);
+                ? (FieldVariety)new GenericTypeImplementingIEquatable(genericParameter, isReferenceType: !only.ValueType) 
+                : new PlainGenericType(genericParameter, isReferenceType: !only.ValueType);
         }
 
         private FieldVariety DetectNonGeneric(TypeReference fieldType)
@@ -123,11 +123,20 @@ namespace Fody4Scala.Fody
         private enum TypeKind { ReferenceType, ValueType, NullableType }
     }
 
-    internal abstract class FieldVariety {}
+    internal abstract class FieldVariety
+    {
+        public FieldVariety(bool? isReferenceType)
+        {
+            IsReferenceType = isReferenceType;
+        }
+
+        public bool? IsReferenceType { get; }
+    }
 
     internal sealed class ReferenceTypeImplementingIEquatable : FieldVariety
     {
         public ReferenceTypeImplementingIEquatable(TypeReference fieldType)
+            : base(isReferenceType: true)
         {
             FieldType = fieldType;
         }
@@ -138,6 +147,7 @@ namespace Fody4Scala.Fody
     internal sealed class TypedCollection : FieldVariety
     {
         public TypedCollection(TypeReference elementType)
+            : base(isReferenceType: true)
         {
             ElementType = elementType;
         }
@@ -145,11 +155,15 @@ namespace Fody4Scala.Fody
         public TypeReference ElementType { get; }
     }
 
-    internal sealed class UntypedColection : FieldVariety { }
+    internal sealed class UntypedColection : FieldVariety
+    {
+        public UntypedColection() : base(isReferenceType: true) { }
+    }
 
     internal sealed class PlainReferenceType : FieldVariety
     {
         public PlainReferenceType(TypeReference fieldType)
+            : base(isReferenceType: true)
         {
             FieldType = fieldType;
         }
@@ -160,15 +174,18 @@ namespace Fody4Scala.Fody
     internal sealed class ValueTypeImplementingIEquatable : FieldVariety
     {
         public ValueTypeImplementingIEquatable(TypeReference fieldType)
+            : base(isReferenceType: false)
         {
             FieldType = fieldType;
         }
 
         public TypeReference FieldType { get; }
     }
+
     internal sealed class PlainValueType : FieldVariety
     {
         public PlainValueType(TypeReference fieldType)
+            : base(isReferenceType: false)
         {
             FieldType = fieldType;
         }
@@ -179,6 +196,7 @@ namespace Fody4Scala.Fody
     internal sealed class NullableTypeImplementingIEquatable : FieldVariety
     {
         public NullableTypeImplementingIEquatable(TypeReference underlyingType)
+            : base(isReferenceType: false)
         {
             UnderlyingType = underlyingType;
         }
@@ -189,6 +207,7 @@ namespace Fody4Scala.Fody
     internal sealed class PlainNullableType : FieldVariety
     {
         public PlainNullableType(TypeReference underlyingType)
+            : base(isReferenceType: false)
         {
             UnderlyingType = underlyingType;
         }
@@ -198,7 +217,8 @@ namespace Fody4Scala.Fody
 
     internal sealed class GenericTypeImplementingIEquatable : FieldVariety
     {
-        public GenericTypeImplementingIEquatable(GenericParameter genericParameter)
+        public GenericTypeImplementingIEquatable(GenericParameter genericParameter, bool? isReferenceType)
+            : base(isReferenceType)
         {
             GenericParameter = genericParameter;
         }
@@ -208,7 +228,8 @@ namespace Fody4Scala.Fody
 
     internal sealed class PlainGenericType : FieldVariety
     {
-        public PlainGenericType(GenericParameter genericParameter)
+        public PlainGenericType(GenericParameter genericParameter, bool? isReferenceType)
+            : base(isReferenceType)
         {
             GenericParameter = genericParameter;
         }

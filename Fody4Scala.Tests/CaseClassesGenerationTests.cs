@@ -40,6 +40,7 @@ namespace Fody4Scala.Tests
                     nameof(Expression.Variable),
                     nameof(Expression.Constant),
                     nameof(Expression.Reference),
+                    nameof(Expression.Any),
                     nameof(Expression.Money),
                     nameof(Expression.UnaryOperator),
                     nameof(Expression.BinaryOperator),
@@ -194,6 +195,39 @@ namespace Fody4Scala.Tests
                         createSimpleCollection().ToString()));
 
             Check.GenericClasses(new CheckingGenericClassToString());
+        }
+
+        [TestMethod]
+        public void ValidateGeneratedClassesGetHashCode()
+        {
+            Check.NonGenericClasses(
+                checkDegenerate: (createDegenerate) =>
+                    Assert.AreEqual(CombineHashCodes(), createDegenerate().GetHashCode()),
+                checkVariable: (variableName, createVariable) =>
+                    Assert.AreEqual(CombineHashCodes(variableName), createVariable().GetHashCode()),
+                checkMoney: (amount, currencyName, createMoney) =>
+                    Assert.AreEqual(CombineHashCodes(amount, currencyName), createMoney().GetHashCode()),
+                checkUnaryOperator: (@operator, expression, createUnaryOperator) =>
+                    Assert.AreEqual(CombineHashCodes(@operator, expression), createUnaryOperator().GetHashCode()),
+                checkBinaryOperator: (@operator, leftExpression, rightExpression, createBinaryOperator) =>
+                    Assert.AreEqual(
+                        CombineHashCodes(@operator, leftExpression, rightExpression),
+                        createBinaryOperator().GetHashCode()),
+                checkLargeTuple: (item1, item2, item3, item4, item5, item6, createLargeTuple) =>
+                    Assert.AreEqual(
+                        CombineHashCodes(item1, item2, item3, item4, item5, item6),
+                        createLargeTuple().GetHashCode()),
+                checkSimpleCollection: (ints, dates, strings, decimals, someThings, someOtherThings, createSimpleCollection) =>
+                    Assert.AreEqual(
+                        CombineHashCodes(ints, dates, strings, decimals, someThings, someOtherThings),
+                        createSimpleCollection().GetHashCode()));
+
+            Check.GenericClasses(new CheckingGenericClassGetHashCode());
+        }
+
+        private static int CombineHashCodes(params object[] values)
+        {
+            return values.Aggregate(857327845, (hashCode, value) => hashCode * -1521134295 + (value?.GetHashCode() ?? 0));
         }
 
         private static Assembly _weavedAssembly;
@@ -434,6 +468,13 @@ namespace Fody4Scala.Tests
                 CheckGenericFactoryMethod<int, int?>(maybeMethod, 0, 1, -100, int.MaxValue, int.MinValue, null);
                 CheckGenericFactoryMethod<DateTime, DateTime?>(maybeMethod, DateTime.Now, DateTime.MinValue, DateTime.MinValue, null);
 
+                // Any
+                var anyMethod = factoryClassType.GetMethod(nameof(Expression.Any));
+                CheckGenericFactoryMethod<decimal, decimal>(anyMethod, 0M, 100.04M, -18846.454561M, decimal.MaxValue, decimal.MinValue);
+                CheckGenericFactoryMethod<string, string>(anyMethod, string.Empty, "1", "two", null);
+                CheckGenericFactoryMethod<int?, int?>(anyMethod, 0, 1, -100, int.MaxValue, int.MinValue, null);
+                CheckGenericFactoryMethod<DateTime?, DateTime?>(anyMethod, DateTime.Now, DateTime.MinValue, DateTime.MinValue, null);
+
                 // Fun2
                 dynamic fun2 = factoryClassType.GetMethod(nameof(Expression.Func2))
                     .MakeGenericMethod(typeof(decimal), typeof(string), typeof(Dictionary<double, DateTime>));
@@ -519,6 +560,19 @@ namespace Fody4Scala.Tests
             public override void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2)
             {
                 Assert.AreEqual($"Func2`3(arg1: {arg1}, arg2: {arg2}, result: {result})", makeFun2().ToString());
+            }
+        }
+
+        private class CheckingGenericClassGetHashCode : CheckingGenericClassLogic
+        {
+            public override void CheckClassWithSingleParameter<T>(T value, Func<dynamic> makeInstance)
+            {
+                Assert.AreEqual(CombineHashCodes(value), makeInstance.GetHashCode());
+            }
+
+            public override void CheckFun2<TArg1, TArg2, TResult>(TArg1 arg1, TArg2 arg2, TResult result, Func<dynamic> makeFun2)
+            {
+                Assert.AreEqual(CombineHashCodes(arg1, arg2, result), makeFun2().GetHashCode());
             }
         }
     }

@@ -16,7 +16,7 @@ namespace Fody4Scala.Fody
             var fieldVarietyDetector = new FieldVarietyDetector(new WellKnownTypes(ModuleDefinition, FindType));
             foreach (var (caseClassesFactory, factoryMethods) in GetAllCaseClassFactoryMethodsGroupedByOwningClass())
             {
-                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem);
+                var caseClassBuilder = new CaseClassBuilder(caseClassesFactory, ModuleDefinition, TypeSystem, FindType);
                 foreach (var factoryMethod in factoryMethods)
                 {
                     var caseClassTypeDefinition = caseClassBuilder.BuildCaseClass(factoryMethod, fieldVarietyDetector);
@@ -86,11 +86,13 @@ namespace Fody4Scala.Fody
             public CaseClassBuilder(
                 TypeDefinition caseClassesFactory,
                 ModuleDefinition moduleDefinition,
-                global::Fody.TypeSystem typeSystem)
+                global::Fody.TypeSystem typeSystem,
+                Func<string, TypeDefinition> findType)
             {
                 _factoryType = caseClassesFactory;
                 _moduleDefinition = moduleDefinition;
                 _typeSystem = typeSystem;
+                _findType = findType;
                 _deepEqualityComparer = _moduleDefinition.ImportReference(typeof(DeepEqualityComparer)).Resolve();
             }
 
@@ -128,6 +130,7 @@ namespace Fody4Scala.Fody
                 var typedEqualsMethod = ImplementIEquatable(caseClassTypeDefinition, properties, fieldVarietyDetector);
                 caseClassTypeDefinition.Methods.Add(typedEqualsMethod);
                 caseClassTypeDefinition.Methods.Add(OverrideObjectEquals(caseClassTypeDefinition, typedEqualsMethod));
+                caseClassTypeDefinition.Methods.Add(OverrideGetHashCode(caseClassTypeDefinition, properties, fieldVarietyDetector));
                 caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, true));
                 caseClassTypeDefinition.Methods.Add(MakeEqualityOperator(caseClassTypeDefinition, false));
 
@@ -157,7 +160,7 @@ namespace Fody4Scala.Fody
             private MethodDefinition OverrideToString(TypeDefinition caseClassTypeDefinition, CaseClassProperty[] properties)
             {
                 var method = new MethodDefinition(
-                    nameof(object.ToString),
+                    nameof(ToString),
                     MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual,
                     _typeSystem.StringReference);
 
@@ -177,9 +180,7 @@ namespace Fody4Scala.Fody
                 {
                     codeEmitter.Emit(OpCodes.Dup);
                     codeEmitter.Emit(OpCodes.Ldc_I4_S, (sbyte)property.Index);
-                    codeEmitter.Emit(OpCodes.Ldarg_0);
-                    codeEmitter.Emit(OpCodes.Ldfld, property.BackingFieldReference);
-                    codeEmitter.Emit(OpCodes.Box, property.BackingFieldReference.FieldType);
+                    property.BoxFieldValue(codeEmitter);
                     codeEmitter.Emit(OpCodes.Stelem_Ref);
                 }
 
@@ -303,6 +304,56 @@ namespace Fody4Scala.Fody
                 return method;
             }
 
+            private MethodDefinition OverrideGetHashCode(
+                TypeDefinition caseClassTypeDefinition, 
+                IEnumerable<CaseClassProperty> properties,
+                FieldVarietyDetector fieldVarietyDetector)
+            {
+                var method = new MethodDefinition(
+                    nameof(GetHashCode),
+                    MethodAttributes.Public | MethodAttributes.HideBySig | MethodAttributes.Virtual,
+                    _typeSystem.Int32Reference);
+
+                var getHashCodeMethod = _moduleDefinition.ImportReference(
+                    _typeSystem.ObjectDefinition.Methods.Single(x => x.Name == nameof(GetHashCode)));
+                var getHashCodeOfValueTypeMethod = _moduleDefinition.ImportReference(
+                    _findType(typeof(ValueType).FullName).Methods.Single(m => m.Name == nameof(GetHashCode)));
+
+                var codeEmitter = method.Body.GetILProcessor();
+                codeEmitter.Emit(OpCodes.Ldc_I4, 857327845);
+
+                foreach (var property in properties)
+                {
+                    codeEmitter.Emit(OpCodes.Ldc_I4, -1521134295);
+                    codeEmitter.Emit(OpCodes.Mul);
+
+                    var doAddition = Instruction.Create(OpCodes.Add);
+                    if (fieldVarietyDetector.Detect(property.BackingFieldReference.FieldType).IsReferenceType ?? true)
+                    {
+                        var callGetHashCode = Instruction.Create(OpCodes.Callvirt, getHashCodeMethod);
+                        property.BoxFieldValue(codeEmitter);
+                        codeEmitter.Emit(OpCodes.Dup);
+                        codeEmitter.Emit(OpCodes.Brtrue_S, callGetHashCode);
+                        codeEmitter.Emit(OpCodes.Pop);
+                        codeEmitter.Emit(OpCodes.Ldc_I4_0);
+                        codeEmitter.Emit(OpCodes.Br_S, doAddition);
+                        codeEmitter.Append(callGetHashCode);
+                    }
+                    else
+                    {
+                        codeEmitter.Emit(OpCodes.Ldarg_0);
+                        codeEmitter.Emit(OpCodes.Ldfld, property.BackingFieldReference);
+                        codeEmitter.Emit(OpCodes.Call, getHashCodeOfValueTypeMethod);
+                    }
+
+                    codeEmitter.Append(doAddition);
+                }
+
+                codeEmitter.Emit(OpCodes.Ret);
+
+                return method;
+            }
+
             private void CallBaseConstructor(ILProcessor ctorBodyEmitter)
             {
                 var factoryDefaultConstructor = _moduleDefinition.ImportReference(_factoryType.GetConstructors().Single());
@@ -320,6 +371,7 @@ namespace Fody4Scala.Fody
             private readonly TypeDefinition _factoryType;
             private readonly ModuleDefinition _moduleDefinition;
             private readonly global::Fody.TypeSystem _typeSystem;
+            private readonly Func<string, TypeDefinition> _findType;
             private readonly TypeDefinition _deepEqualityComparer;
         }
 
@@ -393,6 +445,13 @@ namespace Fody4Scala.Fody
                 ctorBodyEmitter.Emit(OpCodes.Ldarg_0);
                 ctorBodyEmitter.EmitLoadNthArgument(Index, ctorParameters, fromStaticMethod: false);
                 ctorBodyEmitter.Emit(OpCodes.Stfld, BackingFieldReference);
+            }
+
+            public void BoxFieldValue(ILProcessor codeEmitter)
+            {
+                codeEmitter.Emit(OpCodes.Ldarg_0);
+                codeEmitter.Emit(OpCodes.Ldfld, BackingFieldReference);
+                codeEmitter.Emit(OpCodes.Box, BackingFieldReference.FieldType);
             }
 
             public void EmitEqualityCheck(ILProcessor compareCodeEmitter, FieldVarietyDetector fieldVarietyDetector)
@@ -481,15 +540,7 @@ namespace Fody4Scala.Fody
                 EmitFieldEqualityTestingCodeCore(
                     compareCodeEmitter, 
                     deepEqualityComparingMethodName, 
-                    methodToCall => 
-                    {
-                        var genericMethod = new GenericInstanceMethod(methodToCall);
-                        var referencedGenericArgument = methodGenericArgument.IsGenericParameter 
-                            ? methodGenericArgument 
-                            : _moduleDefinition.ImportReference(methodGenericArgument);
-                        genericMethod.GenericArguments.Add(referencedGenericArgument);
-                        return genericMethod;
-                    });
+                    methodToCall => methodToCall.ToGenericInstanceMethod(methodGenericArgument, _moduleDefinition));
             }
 
             private void EmitFieldEqualityTestingCode(
